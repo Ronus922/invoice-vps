@@ -1,0 +1,95 @@
+/* ============================================================
+   Hebrew Fonts - Self-hosted (woff2)
+   Copy this file to your project's public/fonts/ or styles/
+   Fonts: Rubik, Assistant, Heebo
+   ============================================================ */
+
+/* --- Rubik (Headings) --- */
+@font-face {
+  font-family: 'Rubik';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/rubik/rubik-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Rubik';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/rubik/rubik-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Rubik';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/rubik/rubik-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Rubik';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/rubik/rubik-700.woff2') format('woff2');
+}
+
+/* --- Assistant (Body) --- */
+@font-face {
+  font-family: 'Assistant';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/assistant/assistant-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Assistant';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/assistant/assistant-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Assistant';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/assistant/assistant-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Assistant';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/assistant/assistant-700.woff2') format('woff2');
+}
+
+/* --- Heebo (Alternative) --- */
+@font-face {
+  font-family: 'Heebo';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/heebo/heebo-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Heebo';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/heebo/heebo-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Heebo';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/heebo/heebo-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Heebo';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/heebo/heebo-700.woff2') format('woff2');
+}
