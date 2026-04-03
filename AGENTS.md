@@ -248,6 +248,70 @@ Input: "Update landing page"
 Use `/contentmaster` for article generation (branded, non-branded, multi-brand).
 Triggers: "create article", "write article", "generate content"
 
+
+---
+
+## ManyChat Infrastructure
+
+| Task | Agent | Skills |
+|------|-------|--------|
+| Chatbot Setup | ManyChat | /manychat |
+| WhatsApp/IG Bot | ManyChat | /manychat |
+| State Machine / Script | ManyChat | /manychat |
+| CRM Chatbot Integration | ManyChat | /manychat, /utilities |
+
+Triggers: "chatbot", "בוט", "ManyChat", "WhatsApp bot", "תסריט שיחה", "state machine"
+
+---
+
+
+---
+
+## Recommended Dependencies (Standard Stack)
+
+Every CRM/Dashboard/Web project should include these libraries. Install with `--full` flag in `new-project`.
+
+### Tier 1 — חובה (כל פרויקט)
+
+```bash
+pnpm add @tanstack/react-table @tanstack/react-query recharts \
+  react-hook-form @hookform/resolvers zod nuqs
+```
+
+| Library | Purpose | RTL |
+|---------|---------|-----|
+| `@tanstack/react-table` | Headless tables — sorting, filtering, pagination. Shadcn DataTable built on it. | Headless = full RTL control |
+| `@tanstack/react-query` | Server state — cache, background refresh, loading/error. Every Supabase fetch. | N/A |
+| `recharts` | Charts for dashboards. Shadcn Chart component built on it. | `direction="rtl"` |
+| `react-hook-form` + `@hookform/resolvers` | Form state. Shadcn Form built on it. Minimal re-renders. | N/A |
+| `zod` | Schema validation — forms, Server Actions, API. | N/A |
+| `nuqs` | URL state — filters, search, pagination as URL params. | N/A |
+
+### Tier 2 — מומלץ
+
+```bash
+pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
+```
+
+| Library | Purpose |
+|---------|---------|
+| `zustand` | Client state (~1KB) — sidebar, wizard, UI toggles. Replaces Context bloat. |
+| `next-safe-action` | Type-safe Server Actions with Zod validation + middleware (auth, rate-limit). |
+| `@formkit/auto-animate` | One hook, zero config — auto-animates DOM additions/removals (~2KB). |
+| `sonner` | Toast notifications — already used in pye9/synthesis. |
+| `cmdk` | Command palette (⌘K) — quick search in any CRM. |
+
+### Tier 3 — לפי צורך
+
+| Library | When |
+|---------|------|
+| `@react-pdf/renderer` | PDF generation (invoices, reports) — JSX → PDF with Hebrew fonts |
+| `ai` (Vercel AI SDK) | AI chat interface — `useChat`, streaming, multi-provider |
+| `uploadthing` | File uploads — full-stack (S3 + validation + webhooks) |
+| `@dnd-kit/core` + `@dnd-kit/sortable` | Drag-and-drop, Kanban boards |
+| `next-intl` | Full i18n (Hebrew + English + Arabic) |
+| `react-resizable-panels` | Split views, resizable sidebars |
+
 ## 📚 מדריכים לפי נושא
 
 טען את המדריך הרלוונטי לפי הצורך:
@@ -291,3 +355,4 @@ Triggers: "create article", "write article", "generate content"
 | n8n | `@.claude/agents/n8n.md` | אוטומציות |
 | Animations | `@.claude/agents/animations.md` | אנימציות ומוגה |
 | Hebrew Dev | `@.claude/agents/hebrew-fullstack-dev.md` | פיתוח בעברית |
+| ManyChat | `@.claude/agents/manychat.md` | תשתית צ'אטבוט |

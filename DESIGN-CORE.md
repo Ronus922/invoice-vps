@@ -1,240 +1,304 @@
-# DESIGN-CORE.md - חוקי עיצוב בסיסיים
+# DESIGN-CORE.md — Base44 Glassmorphism Design System
 
-> **הוראות:** העתק קובץ זה ל-CLAUDE.md של כל פרויקט חדש.
+> **עיצוב: Dark Gradient + Glassmorphism**
+> מבוסס על InvoiceFlow Base44 — עדכון אחרון: 2026-04-01
 
 ---
 
-## 🎨 חוקי עיצוב מחייבים (MANDATORY!)
+## 1. רקע וצבעי בסיס
 
-> ⚠️ **קרא לפני לבצע לפני כל עבודה כזו או אחרת UI!**
+### רקע ראשי
+```
+bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950
+```
+- **body CSS:** `linear-gradient(to bottom right, #0f172a, #172554, #1e1b4b)`
+- אין light mode — תמיד dark
 
-### 1. Spacing - GAP על Parent, לא MARGIN על Children!
+### היררכיית טקסט (על רקע כהה)
+| שימוש | Class |
+|-------|-------|
+| כותרת ראשית | `text-white` |
+| כותרת משנית | `text-white/80` |
+| טקסט רגיל | `text-white/60` |
+| טקסט מושתק | `text-white/40` |
+| placeholder | `text-white/30` |
+| מינימלי | `text-white/20` |
+
+---
+
+## 2. Glassmorphism Cards (הדפוס המרכזי)
 
 ```tsx
-// ✅ נכון - Parent שולט על המרווח
-<div className="flex flex-col gap-6">
-  <Card />
-  <Card />
-</div>
+// ✅ כרטיס רגיל
+<div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl p-5 shadow-xl">
 
-// ❌ שגוי - margin על children
-<Card className="mb-6" />
-<Card className="mb-6" />
+// ✅ כרטיס עם hover
+<div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl p-5 shadow-xl hover:bg-white/15 transition-all duration-300">
+
+// ❌ שגוי — אין להשתמש ב-semantic tokens ישנים
+<div className="bg-surface-container-low">
 ```
 
-### 2. טבלת Spacing:
+### רמות שקיפות
+| רמה | Class | שימוש |
+|-----|-------|-------|
+| Surface | `bg-white/5` | רקע עדין, drop zone |
+| Card | `bg-white/10` | כרטיסים, panels |
+| Hover | `bg-white/15` | hover state |
+| Active | `bg-white/20` | selected state |
+| Header | `bg-white/5` | table header, card header |
 
-| Class | פיקסלים | שימוש |
-|-------|---------|-------|
-| `gap-1` | 4px | בין אייקון לטקסט קטן |
-| `gap-2` | 8px | icon + text |
-| `gap-3` | 12px | שורות בטופס |
-| `gap-4` | 16px | form fields |
-| `gap-6` | 24px | cards / groups |
-| `gap-8` | 32px | sections |
-| `gap-12` | 48px | main sections |
+---
 
-### 3. Layout Pattern - Admin/Dashboard Pages:
+## 3. Gradient Icons (אייקוני קטגוריה)
 
-```tsx
-<div className="space-y-6 p-6">
-  {/* Header */}
-  <div className="flex items-center justify-between">
-    <div>
-      <h1 className="text-2xl font-bold">כותרת עמוד</h1>
-      <p className="text-slate-600 mt-1">תיאור קצר</p>
-    </div>
-    <Button>פעולה ראשית</Button>
-  </div>
+כל קטגוריה מקבלת gradient ייחודי:
 
-  {/* Stats Cards */}
-  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-    <StatsCard />
-    <StatsCard />
-    <StatsCard />
-    <StatsCard />
-  </div>
-
-  {/* Main Content Card */}
-  <div className="bg-white rounded-xl border border-slate-200 p-6">
-    {/* תוכן */}
-  </div>
-</div>
-```
-
-### 4. גבהים תקניים:
-
-| רכיב | Class | פיקסלים |
-|-------|-------|---------|
-| Input/Select | `h-12` | 48px |
-| Button Primary | `h-12 px-6` | 48px |
-| Button Secondary | `h-10 px-4` | 40px |
-| Touch targets | `min-h-[44px]` | 44px+ |
-| Table rows | `py-4` | - |
-
-### 5. צבעים - רק semantic:
+| קטגוריה | Gradient | Glow Shadow |
+|---------|----------|-------------|
+| Success / Processed | `from-emerald-500 to-teal-500` | `shadow-emerald-500/25` |
+| Financial / Total | `from-blue-500 to-cyan-500` | `shadow-blue-500/25` |
+| Time / Schedule | `from-amber-500 to-orange-500` | `shadow-amber-500/25` |
+| Download / Export | `from-purple-500 to-violet-500` | `shadow-purple-500/25` |
+| Upload | `from-pink-500 to-rose-500` | — |
+| Table / Data | `from-indigo-500 to-blue-600` | — |
+| Header CTA | `from-blue-400 to-indigo-500` | `shadow-blue-500/30` |
 
 ```tsx
-// ✅ נכון - semantic colors
-className="bg-white text-slate-900 border-slate-200"
-className="bg-teal-600 text-white hover:bg-teal-700"
-className="text-slate-600 hover:text-slate-900"
-
-// ❌ שגוי - hardcoded
-className="bg-[#123456]"
-style={{ color: '#ff0000' }}
-```
-
-### 6. טבלת צבעים:
-
-| שימוש | Light Mode | Dark Mode |
-|-------|------------|-----------|
-| רקע עמוד | `bg-slate-50` | `dark:bg-slate-950` |
-| רקע card | `bg-white` | `dark:bg-slate-900` |
-| טקסט ראשי | `text-slate-900` | `dark:text-white` |
-| טקסט משני | `text-slate-600` | `dark:text-slate-400` |
-| גבול | `border-slate-200` | `dark:border-slate-800` |
-| Primary | `bg-teal-600` | - |
-| Success | `bg-green-100 text-green-700` | - |
-| Error | `bg-red-100 text-red-700` | - |
-| Warning | `bg-amber-100 text-amber-700` | - |
-
-### 7. RTL Support (עברית):
-
-```tsx
-// ✅ נכון - Logical properties
-className="ps-4"    // padding-start
-className="pe-4"    // padding-end
-className="ms-auto" // margin-start
-className="text-start"
-
-// ❌ שגוי - Physical properties
-className="pl-4"    // padding-left
-className="pr-4"    // padding-right
-className="text-left"
-```
-
-### 8. Form Patterns:
-
-```tsx
-<form className="space-y-4">
-  {/* Single field */}
-  <div className="space-y-2">
-    <label className="block text-sm font-medium text-slate-700">
-      שם משתמש <span className="text-red-500">*</span>
-    </label>
-    <input
-      type="text"
-      className="w-full h-12 px-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-      placeholder="placeholder..."
-    />
-  </div>
-
-  {/* Two columns */}
-  <div className="grid grid-cols-2 gap-4">
-    <div className="space-y-2">
-      <label>שדה 1</label>
-      <input ... />
-    </div>
-    <div className="space-y-2">
-      <label>שדה 2</label>
-      <input ... />
-    </div>
-  </div>
-
-  {/* Actions */}
-  <div className="flex gap-3 pt-4">
-    <button type="button" className="flex-1 h-12 rounded-xl border border-slate-200 hover:bg-slate-50">
-      ביטול
-    </button>
-    <button type="submit" className="flex-1 h-12 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700">
-      שמירה
-    </button>
-  </div>
-</form>
-```
-
-### 9. Card Patterns:
-
-```tsx
-{/* Stats Card */}
-<div className="bg-white rounded-xl border border-slate-200 p-6">
-  <div className="flex items-center justify-between">
-    <div>
-      <p className="text-slate-600 text-sm">כותרת</p>
-      <p className="text-3xl font-bold mt-1">123</p>
-    </div>
-    <div className="p-3 bg-teal-100 rounded-xl">
-      <Icon className="w-6 h-6 text-teal-600" />
-    </div>
-  </div>
-</div>
-
-{/* Content Card */}
-<div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-  {/* Header */}
-  <div className="px-6 py-4 border-b border-slate-100">
-    <h3 className="font-bold">כותרת</h3>
-  </div>
-  {/* Body */}
-  <div className="p-6">
-    {/* content */}
-  </div>
-</div>
-```
-
-### 10. Table Patterns:
-
-```tsx
-<div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-  <table className="w-full">
-    <thead className="bg-slate-50 border-b border-slate-200">
-      <tr>
-        <th className="px-4 py-3 text-right font-bold text-slate-700">עמודה</th>
-        ...
-      </tr>
-    </thead>
-    <tbody className="divide-y divide-slate-100">
-      <tr className="hover:bg-slate-50 transition-colors">
-        <td className="px-4 py-4">תוכן</td>
-        ...
-      </tr>
-    </tbody>
-  </table>
+// ✅ דפוס אייקון gradient
+<div className="bg-gradient-to-br from-emerald-500 to-teal-500 p-2.5 rounded-xl shadow-lg">
+  <Icon className="w-5 h-5 text-white" />
 </div>
 ```
 
 ---
 
-## מה לא תעשה (NEVER!):
+## 4. כפתורים
+
+### Primary (CTA)
+```tsx
+<button className="bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-2.5 rounded-xl transition-all">
+```
+
+### Secondary (Action)
+```tsx
+<button className="bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-300 hover:text-blue-200 text-sm font-medium px-3 py-2 rounded-xl transition-all">
+```
+
+### Ghost
+```tsx
+<button className="bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 hover:text-white text-sm font-medium px-3 py-2 rounded-xl transition-all">
+```
+
+### Destructive
+```tsx
+<button className="bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400 hover:text-red-300 text-xs font-medium px-3 py-1.5 rounded-lg transition-all">
+```
+
+### Export Buttons
+| סוג | Classes |
+|-----|---------|
+| ZIP | `bg-indigo-500/20 border-indigo-500/30 text-yellow-400` |
+| CSV/Excel | `bg-emerald-500/20 border-emerald-500/30 text-emerald-300` |
+| Print | `bg-white/10 border-white/15 text-white/70` |
+
+---
+
+## 5. Inputs & Forms
+
+### Input
+```tsx
+<input className="h-9 w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-blue-400/50 focus:ring-1 focus:ring-blue-400/50 [color-scheme:dark]" />
+```
+
+### Select Trigger
+```tsx
+<SelectTrigger className="bg-white/10 border-white/15 text-white/80 focus:border-blue-400/50">
+```
+
+### Labels
+```tsx
+<label className="block text-xs text-white/50 mb-1.5">שם שדה</label>
+```
+
+---
+
+## 6. Status Badges
+
+| סטטוס | Classes |
+|-------|---------|
+| Gmail | `bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full` |
+| WhatsApp | `bg-green-500/20 text-green-300 border border-green-500/30 rounded-full` |
+| Manual | `bg-white/10 text-white/40 border border-white/10 rounded-full` |
+| Success | `bg-emerald-500/10 border-emerald-500/20 text-emerald-400` |
+| Warning | `bg-amber-500/10 border-amber-500/20 text-amber-400` |
+| Error | `bg-red-500/10 border-red-500/20 text-red-400` |
+| Processing | `bg-blue-500/10 border-blue-500/20 text-blue-300` |
+
+---
+
+## 7. Table Design
+
+### Container
+```tsx
+<div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl shadow-xl overflow-hidden">
+```
+
+### Header
+```tsx
+<TableRow className="bg-white/5 border-white/10">
+  <TableHead className="text-right text-xs font-semibold text-white">
+```
+
+### Row
+```tsx
+<TableRow className="hover:bg-white/10 transition-colors border-white/5 cursor-pointer">
+  <TableCell className="text-sm text-white/50">   // date
+  <TableCell className="text-sm font-semibold text-white">  // vendor
+  <TableCell className="text-sm text-blue-300 font-mono">   // doc number
+  <TableCell className="text-sm font-bold text-emerald-400"> // total ₪
+```
+
+### Sort Icons
+- Unsorted: `opacity-40`
+- Active: `text-blue-300`
+
+---
+
+## 8. Dialogs & Modals
+
+### Dialog Content
+```tsx
+className="bg-slate-900 border border-white/15 rounded-2xl p-6 shadow-2xl"
+```
+
+### Overlay
+```tsx
+className="bg-black/60 backdrop-blur-sm"
+```
+
+### Mobile Bottom Sheet
+```tsx
+className="bg-gradient-to-b from-slate-800 to-slate-900 border-t border-white/10 rounded-t-3xl"
+```
+
+---
+
+## 9. Alert / Warning Section
+
+```tsx
+// Amber warning container
+<div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl">
+
+// Header icon
+<div className="bg-amber-500/20 p-1.5 rounded-lg">
+  <AlertTriangle className="w-4 h-4 text-amber-400" />
+</div>
+
+// Title
+<span className="text-amber-300 font-semibold text-sm">
+```
+
+---
+
+## 10. Typography
+
+| Element | Font | Size | Weight |
+|---------|------|------|--------|
+| Page title | Manrope | `text-2xl sm:text-3xl` | `font-bold` |
+| Section title | Manrope | `text-lg` | `font-bold` |
+| Body text | Heebo/Inter | `text-sm` | `font-medium` |
+| Labels | Heebo/Inter | `text-xs` | `font-medium` |
+| Stats numbers | Manrope | `text-2xl` | `font-bold` |
+| Badge text | Heebo/Inter | `text-xs` | `font-medium` |
+
+### Font Loading
+```html
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Heebo:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+```
+
+---
+
+## 11. Spacing
+
+| שימוש | Class |
+|-------|-------|
+| Page padding | `px-3 sm:px-6 lg:px-10 py-6 sm:py-8` |
+| Section gap | `space-y-4 sm:space-y-6` |
+| Card padding | `p-5` or `p-6` |
+| Card inner gap | `gap-3` or `gap-4` |
+| Stats grid | `grid-cols-2 lg:grid-cols-4 gap-4` |
+| Filter grid | `grid-cols-2 sm:flex sm:flex-wrap gap-3` |
+
+---
+
+## 12. Hover & Transitions
+
+```tsx
+// Card lift
+hover:-translate-y-0.5 transition-all duration-300
+
+// Background shift
+hover:bg-white/15 transition-all
+
+// Opacity reveal (delete button)
+opacity-0 group-hover:opacity-100 transition-opacity
+
+// Color shift
+hover:text-blue-200 transition-colors
+```
+
+---
+
+## 13. Border Radius
+
+| Element | Class |
+|---------|-------|
+| Cards | `rounded-2xl` |
+| Buttons | `rounded-xl` |
+| Inputs | `rounded-xl` |
+| Badges | `rounded-full` |
+| Dialogs | `rounded-2xl` |
+| Mobile sheet | `rounded-t-3xl` |
+| Small items | `rounded-lg` |
+
+---
+
+## 14. Queue Item States (Upload)
+
+```tsx
+// Pending
+'bg-white/5 border-white/10'    → Clock icon text-white/30
+
+// Processing
+'bg-blue-500/10 border-blue-500/20' → Loader2 animate-spin text-blue-400
+
+// Done
+'bg-emerald-500/10 border-emerald-500/20' → Check text-emerald-400
+
+// Error
+'bg-red-500/10 border-red-500/20' → AlertCircle text-red-400
+
+// Duplicate
+'bg-amber-500/10 border-amber-500/20' → AlertCircle text-amber-400
+```
+
+---
+
+## אנטי-דפוסים (NEVER!)
 
 | ❌ שגוי | ✅ נכון |
 |--------|--------|
-| `mb-4` על children | `gap-4` על parent |
-| `bg-[#123456]` | `bg-slate-600` |
-| `pl-4` / `pr-4` | `ps-4` / `pe-4` |
-| `text-left` | `text-start` |
-| `h-10` על input | `h-12` על input |
-| `p-2` על button | `px-6 py-3` או `h-12 px-6` |
-| חוסר אחידות gap | `space-y-4` על form |
+| `bg-surface-container-low` | `bg-white/10 backdrop-blur-sm border border-white/15` |
+| `text-on-surface` | `text-white` |
+| `text-on-surface-variant/60` | `text-white/50` |
+| `text-primary` (teal) | `text-blue-300` or `text-emerald-400` |
+| `bg-error-container` | `bg-red-500/20 border border-red-500/30` |
+| `glow-primary` | `shadow-xl shadow-blue-500/25` |
+| Flat surface cards | Glassmorphism with `backdrop-blur-sm` |
+| Monochrome icon boxes | Gradient icon boxes (`from-X to-Y`) |
+| Light mode colors | Dark-only design |
 
 ---
 
-## Status Badges Pattern:
-
-```tsx
-const STATUS_CONFIG = {
-  active: { label: 'פעיל', className: 'bg-green-100 text-green-700' },
-  pending: { label: 'ממתין', className: 'bg-amber-100 text-amber-700' },
-  inactive: { label: 'לא פעיל', className: 'bg-slate-100 text-slate-600' },
-  error: { label: 'שגיאה', className: 'bg-red-100 text-red-700' },
-}
-
-<span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_CONFIG[status].className}`}>
-  {STATUS_CONFIG[status].label}
-</span>
-```
-
----
-
-**זכור: עיצוב נכון = Gap על Parent + גבהים תקניים + צבעים semantic!**
+**זכור: White opacity layers + colored gradients + backdrop blur = Base44 Design**
