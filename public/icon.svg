@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#1f0a42"/>
+  <!-- Arc -->
+  <path d="M120 340 C120 150 392 150 392 340" fill="none" stroke="#00e5d0" stroke-width="30" stroke-linecap="round"/>
+  <!-- Chevron/Shield -->
+  <path d="M206 210 L256 280 L306 210 L306 250 L256 320 L206 250 Z" fill="#00e5d0"/>
+  <!-- Three squares -->
+  <rect x="200" y="370" width="26" height="26" rx="3" fill="#00e5d0"/>
+  <rect x="243" y="370" width="26" height="26" rx="3" fill="#00e5d0"/>
+  <rect x="286" y="370" width="26" height="26" rx="3" fill="#00e5d0"/>
+</svg>
