@@ -42,13 +42,14 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
 TableRow.displayName = 'TableRow'
 
 const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<HTMLTableCellElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <th
       ref={ref}
       className={cn(
         'h-10 px-4 py-3 text-left align-middle font-medium text-white/60 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
         className
       )}
+      style={{ fontSize: '18px', fontWeight: 700, ...style }}
       {...props}
     />
   )

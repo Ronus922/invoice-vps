@@ -82,7 +82,7 @@ export default function DatePicker({
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[280px] p-3" align="start" dir="rtl">
+      <PopoverContent className="w-[min(280px,calc(100vw-2rem))] p-3" align="start" dir="rtl">
         {/* Month Navigation */}
         <div className="flex items-center justify-between mb-3">
           <button
@@ -125,7 +125,7 @@ export default function DatePicker({
               <button
                 key={i}
                 onClick={() => handleSelect(day)}
-                className={`h-8 w-full rounded-lg text-sm transition-all flex items-center justify-center
+                className={`h-10 sm:h-8 w-full rounded-lg text-sm transition-all flex items-center justify-center
                   ${!inMonth ? 'text-white/15' : ''}
                   ${selected ? 'bg-blue-500 text-white font-semibold' : ''}
                   ${!selected && today ? 'bg-blue-500/20 text-blue-300 font-semibold' : ''}
@@ -147,7 +147,7 @@ export default function DatePicker({
               setViewDate(today)
               handleSelect(today)
             }}
-            className="w-full text-xs text-blue-300 hover:text-blue-200 py-1 transition-colors"
+            className="w-full text-xs text-blue-300 hover:text-blue-200 py-2.5 sm:py-1 transition-colors"
           >
             היום
           </button>
