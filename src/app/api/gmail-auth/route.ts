@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -8,6 +9,9 @@ const supabase = createClient(
 
 // GET: Redirect to Google OAuth consent screen
 export async function GET() {
+  const user = await getAuthenticatedUser()
+  if (!user) return unauthorizedResponse()
+
   // Read client_id from DB first, fallback to env
   const { data: tokenRow } = await supabase
     .from('gmail_tokens')
@@ -21,7 +25,11 @@ export async function GET() {
   }
 
   const redirectUri = `${process.env.APP_URL}/api/gmail-auth/callback`
-  const scope = 'https://www.googleapis.com/auth/gmail.readonly'
+  const scope = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/drive.file',
+  ].join(' ')
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
   authUrl.searchParams.set('client_id', clientId)

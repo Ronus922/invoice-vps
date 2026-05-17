@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -7,6 +8,9 @@ const supabase = createClient(
 )
 
 export async function GET(request: NextRequest) {
+  const user = await getAuthenticatedUser()
+  if (!user) return unauthorizedResponse()
+
   const code = request.nextUrl.searchParams.get('code')
 
   if (!code) {

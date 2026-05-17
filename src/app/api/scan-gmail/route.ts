@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
+import { getGmailAccessToken } from '@/lib/gmail'
+import { parseExtractedJson } from '@/lib/ai-json-parse'
+import { normalizeVendorName } from '@/lib/vendor-utils'
+import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
+import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
+import { sendInvoiceToAccountant } from '@/lib/accountant-send'
+import { normalizeCurrency } from '@/lib/format'
+import {
+  INVOICE_EXTRACTION_PROMPT,
+  INVOICE_EXTRACTION_MODEL,
+  INVOICE_EXTRACTION_MAX_TOKENS,
+} from '@/lib/invoice-extraction-prompt'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,78 +21,8 @@ const supabase = createClient(
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-const JSON_SCHEMA_PROMPT = `Extract invoice data from this document. Return ONLY a JSON object with these fields:
-{
-  "date": "DD/MM/YYYY format",
-  "vendor": "vendor/supplier name in Hebrew if possible",
-  "doc_number": "invoice/receipt number",
-  "description": "short description in Hebrew",
-  "pretax": number (amount before VAT in NIS),
-  "vat": number (VAT amount in NIS),
-  "total": number (total including VAT in NIS),
-  "payment_method": "payment method in Hebrew if visible",
-  "category": "one of: תוכנה, ענן, חשמל, ציוד משרדי, שירותים, תקשורת, ביטוח, שכירות, משלוח, שיווק, הדרכה, תחזוקה, נסיעות, אירוח, אחר"
-}
-Return ONLY valid JSON, no markdown code fences.`
-
 function base64urlToBase64(b64url: string): string {
   return b64url.replace(/-/g, '+').replace(/_/g, '/')
-}
-
-// ─── Gmail Auth ───────────────────────────────────────────
-
-async function getGmailAccessToken(): Promise<string> {
-  const { data: tokenRow } = await supabase
-    .from('gmail_tokens')
-    .select('*')
-    .eq('id', 'default')
-    .single()
-
-  const clientId = tokenRow?.client_id || process.env.GMAIL_CLIENT_ID
-  const clientSecret = tokenRow?.client_secret || process.env.GMAIL_CLIENT_SECRET
-  const refreshToken = tokenRow?.refresh_token || process.env.GMAIL_REFRESH_TOKEN
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Gmail OAuth credentials not configured. Go to /api/gmail-auth to connect.')
-  }
-
-  if (tokenRow?.access_token && tokenRow?.access_token_expires_at) {
-    const expiresAt = new Date(tokenRow.access_token_expires_at).getTime()
-    if (Date.now() < expiresAt - 5 * 60 * 1000) {
-      return tokenRow.access_token
-    }
-  }
-
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Failed to refresh Gmail token: ${err}`)
-  }
-
-  const data = await res.json()
-
-  await supabase
-    .from('gmail_tokens')
-    .update({
-      access_token: data.access_token,
-      access_token_expires_at: data.expires_in
-        ? new Date(Date.now() + data.expires_in * 1000).toISOString()
-        : null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', 'default')
-
-  return data.access_token
 }
 
 // ─── Gmail Helpers ────────────────────────────────────────
@@ -92,7 +34,10 @@ async function fetchAttachmentData(
 ): Promise<string | null> {
   const res = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attachmentId}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(20000),
+    }
   )
   if (!res.ok) return null
   const data = await res.json()
@@ -109,10 +54,64 @@ interface GmailHeader {
 }
 
 interface GmailPart {
+  partId?: string
   filename?: string
   mimeType?: string
-  body?: { attachmentId?: string }
+  body?: { attachmentId?: string; size?: number }
+  parts?: GmailPart[]
+  headers?: GmailHeader[]
 }
+
+const INLINE_IMAGE_SIZE_THRESHOLD = 30 * 1024
+
+function collectAttachmentParts(part: GmailPart, acc: GmailPart[] = []): GmailPart[] {
+  if (part.body?.attachmentId && part.filename) {
+    acc.push(part)
+  }
+  for (const sub of part.parts || []) {
+    collectAttachmentParts(sub, acc)
+  }
+  return acc
+}
+
+function isInlineDecorativeImage(part: GmailPart): boolean {
+  const mimeType = (part.mimeType || '').toLowerCase()
+  if (!mimeType.startsWith('image/')) return false
+
+  const disposition =
+    (part.headers || []).find((h) => h.name.toLowerCase() === 'content-disposition')?.value || ''
+  if (disposition.toLowerCase().includes('inline')) return true
+
+  const cid = (part.headers || []).find((h) => h.name.toLowerCase() === 'content-id')?.value || ''
+  if (cid) return true
+
+  const size = part.body?.size || 0
+  if (size > 0 && size < INLINE_IMAGE_SIZE_THRESHOLD) return true
+
+  return false
+}
+
+const POSITIVE_INVOICE_TERMS = [
+  'חשבונית',
+  'חשבונית מס',
+  'קבלה',
+  'invoice',
+  'receipt',
+  'taxinvoice',
+  'tax invoice',
+  'חשבונית-מס',
+]
+
+const NEGATIVE_INVOICE_TERMS = [
+  'הצעת מחיר',
+  'quote',
+  'proforma',
+  'statement',
+  'דוח',
+  'report',
+  'תעודת משלוח',
+  'delivery note',
+]
 
 interface ProcessResult {
   status: 'created' | 'duplicate' | 'error'
@@ -120,12 +119,106 @@ interface ProcessResult {
   vendor?: string
 }
 
+interface ProgressSnapshot {
+  phase: 'search' | 'fetch_messages' | 'prepare_attachments' | 'process_attachments' | 'finalizing'
+  processedMessages: number
+  totalMessages: number
+  processedAttachments: number
+  totalAttachments: number
+  created: number
+  duplicates: number
+  errors: number
+}
+
+interface ExtractedInvoice {
+  date?: string
+  vendor?: string
+  doc_number?: string
+  description?: string
+  currency?: string
+  pretax?: number
+  vat?: number
+  total?: number
+  payment_method?: string
+  category?: string
+}
+
+function hasAnyTerm(value: string, terms: string[]): boolean {
+  const normalized = value.toLowerCase()
+  return terms.some((term) => normalized.includes(term.toLowerCase()))
+}
+
+// Returns true ONLY for clear non-invoice signals. We do NOT require a
+// positive match — many legitimate invoices arrive with neutral subjects
+// like "Your monthly statement" or filenames like "INV-12345.pdf" that
+// contain no positive keyword. We let the AI extractor be the truth and
+// only short-circuit when the email/filename obviously says "this is not
+// an invoice" (quote, proforma, delivery note).
+function isObviousNonInvoice(subject: string, sender: string, filename: string): boolean {
+  const filenameLower = filename.toLowerCase()
+  if (filenameLower && hasAnyTerm(filenameLower, NEGATIVE_INVOICE_TERMS)) return true
+
+  const subjectLower = `${subject} ${sender}`.toLowerCase().trim()
+  if (!subjectLower) return false
+
+  // Subject-level negative is a softer signal — only skip when it's a
+  // negative term AND there is NO positive term anywhere (subject, sender,
+  // or filename). This avoids killing real invoices that happen to share
+  // a thread with a quote.
+  const hasNegativeSubject = hasAnyTerm(subjectLower, NEGATIVE_INVOICE_TERMS)
+  if (!hasNegativeSubject) return false
+
+  const haystack = `${subjectLower} ${filenameLower}`
+  const hasPositiveAnywhere = hasAnyTerm(haystack, POSITIVE_INVOICE_TERMS)
+  return !hasPositiveAnywhere
+}
+
+function isSupportedInvoiceFile(filename: string): boolean {
+  const normalized = filename.toLowerCase()
+  return (
+    normalized.endsWith('.pdf') ||
+    normalized.endsWith('.png') ||
+    normalized.endsWith('.jpg') ||
+    normalized.endsWith('.jpeg') ||
+    normalized.endsWith('.webp')
+  )
+}
+
+function toGmailAfterQuery(isoDate: string | null | undefined): string {
+  if (!isoDate) return ''
+  const ts = new Date(isoDate).getTime()
+  if (!Number.isFinite(ts)) return ''
+  // Buffer one minute back to avoid timezone/clock edge misses.
+  const seconds = Math.max(0, Math.floor(ts / 1000) - 60)
+  return `after:${seconds}`
+}
+
+async function loadVendorCategoryMemory(): Promise<Map<string, string>> {
+  const { data } = await supabase
+    .from('invoices')
+    .select('vendor, category')
+    .not('category', 'is', null)
+    .limit(3000)
+
+  const memory = new Map<string, string>()
+  for (const row of data || []) {
+    const vendor = String(row.vendor || '').trim()
+    const category = String(row.category || '').trim()
+    if (!vendor || !category) continue
+    memory.set(normalizeVendorName(vendor), category)
+  }
+
+  return memory
+}
+
 // ─── Attachment Processing ────────────────────────────────
 
 async function processAttachment(
   accessToken: string,
   messageId: string,
-  part: GmailPart
+  part: GmailPart,
+  vendorCategoryMemory: Map<string, string>,
+  createdBy: string | null
 ): Promise<ProcessResult | null> {
   const filename = part.filename || ''
   const mimeType = part.mimeType || ''
@@ -157,8 +250,8 @@ async function processAttachment(
 
   try {
     const result = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: INVOICE_EXTRACTION_MODEL,
+      max_tokens: INVOICE_EXTRACTION_MAX_TOKENS,
       messages: [
         {
           role: 'user',
@@ -176,7 +269,7 @@ async function processAttachment(
                     data: b64,
                   },
                 },
-            { type: 'text' as const, text: JSON_SCHEMA_PROMPT },
+            { type: 'text' as const, text: INVOICE_EXTRACTION_PROMPT },
           ],
         },
       ],
@@ -184,26 +277,73 @@ async function processAttachment(
 
     const textBlock = result.content.find((b) => b.type === 'text')
     const text = textBlock && 'text' in textBlock ? textBlock.text : ''
-    const cleaned = text.replace(/```json?\n?/g, '').replace(/```\n?/g, '').trim()
-    const extracted = JSON.parse(cleaned)
+    const extracted = parseExtractedJson(text) as ExtractedInvoice
+    extracted.currency = normalizeCurrency(extracted.currency)
+    const vendor = String(extracted.vendor || '').trim()
+    if (vendor) {
+      const remembered = vendorCategoryMemory.get(normalizeVendorName(vendor))
+      if (remembered) {
+        extracted.category = remembered
+      }
+    }
+
+    const validation = validateInvoiceArithmetic({
+      pretax: extracted.pretax ?? null,
+      vat: extracted.vat ?? null,
+      total: extracted.total ?? null,
+    })
 
     if (extracted.doc_number) {
-      const { data: existing } = await supabase
+      const duplicateQuery = supabase
         .from('invoices')
         .select('id')
         .eq('doc_number', String(extracted.doc_number))
+        .limit(1)
+
+      if (vendor) {
+        duplicateQuery.eq('vendor', vendor)
+      }
+
+      const { data: existing } = await duplicateQuery
 
       if (existing && existing.length > 0) {
         return { status: 'duplicate', filename, vendor: extracted.vendor }
       }
     }
 
-    await supabase.from('invoices').insert({
-      ...extracted,
-      file_url,
-      file_name: filename || `invoice_${Date.now()}.pdf`,
-      source: 'gmail',
-    })
+    const { data: inserted } = await supabase
+      .from('invoices')
+      .insert({
+        ...extracted,
+        file_url,
+        file_name: filename || `invoice_${Date.now()}.pdf`,
+        source: 'gmail',
+        created_by: createdBy,
+        needs_review: !validation.ok,
+        validation_error: validation.reason,
+        extraction_raw: {
+          model: INVOICE_EXTRACTION_MODEL,
+          raw_text: text,
+          parsed: extracted,
+          validation_error: validation.reason,
+          scanned_at: new Date().toISOString(),
+          source: 'gmail',
+        },
+      })
+      .select('id')
+      .single()
+
+    if (vendor && extracted.category) {
+      vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
+    }
+
+    sendInvoiceToAccountant({
+      invoiceId: inserted?.id ?? null,
+      fileUrl: file_url,
+      vendor: extracted.vendor,
+      date: extracted.date,
+      needsReview: !validation.ok,
+    }).catch((err) => console.error('[scan-gmail] accountant send error:', err))
 
     return { status: 'created', filename, vendor: extracted.vendor }
   } catch {
@@ -266,9 +406,26 @@ async function updateScanState(scannedCount: number, invoicesCount: number) {
     .eq('id', 'default')
 }
 
+// ─── Auth ─────────────────────────────────────────────────
+
+async function authorize(
+  request: NextRequest
+): Promise<{ ok: true; userId: string | null } | { ok: false; res: ReturnType<typeof unauthorizedResponse> }> {
+  const cronSecret = request.headers.get('x-cron-secret')
+  if (cronSecret && process.env.CRON_SECRET && cronSecret === process.env.CRON_SECRET) {
+    return { ok: true, userId: null }
+  }
+  const user = await getAuthenticatedUser()
+  if (user) return { ok: true, userId: user.id }
+  return { ok: false, res: unauthorizedResponse() }
+}
+
 // ─── GET: Scan status ─────────────────────────────────────
 
 export async function GET() {
+  const user = await getAuthenticatedUser()
+  if (!user) return unauthorizedResponse()
+
   const scanState = await getScanState()
   const { count: scannedCount } = await supabase
     .from('scanned_emails')
@@ -285,12 +442,41 @@ export async function GET() {
 // ─── POST: Run scan ───────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json().catch(() => ({}))
-    const maxMessages: number = body.maxMessages || 50
-    const mode: 'quick' | 'full' = body.mode || 'quick'
+  const auth = await authorize(request)
+  if (!auth.ok) return auth.res
+  const isCronRun = auth.userId === null
+  const createdBy: string | null = auth.userId
 
-    // Mark scan start
+  const body = await request.json().catch(() => ({}))
+  const requestedMax = Number(body.maxMessages)
+  const maxMessages = Number.isFinite(requestedMax)
+    ? Math.min(Math.max(Math.floor(requestedMax), 1), 200)
+    : 50
+  const mode: 'quick' | 'full' = body.mode || 'quick'
+  const allowRescan = Boolean(body.allowRescan)
+  const streamProgress = Boolean(body.streamProgress)
+
+  interface AttachmentJob {
+    msgId: string
+    part: GmailPart
+    sender: string
+    subject: string
+    emailDate: string | null
+  }
+
+  const runScan = async (onProgress?: (snapshot: ProgressSnapshot) => void) => {
+    const progress: ProgressSnapshot = {
+      phase: 'search',
+      processedMessages: 0,
+      totalMessages: 0,
+      processedAttachments: 0,
+      totalAttachments: 0,
+      created: 0,
+      duplicates: 0,
+      errors: 0,
+    }
+    const report = () => onProgress?.({ ...progress })
+
     await supabase
       .from('gmail_tokens')
       .update({ last_scan_started_at: new Date().toISOString() })
@@ -298,34 +484,42 @@ export async function POST(request: NextRequest) {
 
     const accessToken = await getGmailAccessToken()
     const authHeader = { Authorization: `Bearer ${accessToken}` }
+    const vendorCategoryMemory = await loadVendorCategoryMemory()
+    const scanState = await getScanState()
+    const alreadyScanned = allowRescan ? new Set<string>() : await getAlreadyScannedIds()
 
-    // Get already scanned email IDs (skip in quick mode)
-    const alreadyScanned = mode === 'quick' ? await getAlreadyScannedIds() : new Set<string>()
+    const incrementalAfter = mode === 'full' ? '' : toGmailAfterQuery(scanState?.last_scan_completed_at)
+    const queryParts = [
+      'in:inbox',
+      'has:attachment',
+      '(filename:pdf OR filename:jpg OR filename:jpeg OR filename:png OR filename:webp)',
+      incrementalAfter,
+    ].filter(Boolean)
+    const gmailQuery = queryParts.join(' ')
 
-    // Search Gmail for emails with attachments
     const searchRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=has:attachment+filename:pdf&maxResults=${maxMessages}`,
-      { headers: authHeader }
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${maxMessages}`,
+      { headers: authHeader, signal: AbortSignal.timeout(20000) }
     )
 
     if (!searchRes.ok) {
       const errText = await searchRes.text()
-      return NextResponse.json({ status: 'error', message: `Gmail API error: ${errText}` })
+      throw new Error(`Gmail API error: ${errText}`)
     }
 
     const searchData = await searchRes.json()
     const allMessages: { id: string }[] = searchData.messages || []
-
-    // Filter out already scanned emails in quick mode
     const skippedAlreadyScanned = allMessages.filter((m) => alreadyScanned.has(m.id)).length
-    const newMessages = mode === 'quick'
-      ? allMessages.filter((m) => !alreadyScanned.has(m.id))
-      : allMessages
+    const newMessages = allMessages.filter((m) => !alreadyScanned.has(m.id))
+
+    progress.totalMessages = newMessages.length
+    progress.phase = 'fetch_messages'
+    report()
 
     if (newMessages.length === 0) {
-      const scanState = await getScanState()
-      return NextResponse.json({
-        status: 'ok',
+      await updateScanState(0, 0)
+      return {
+        status: 'ok' as const,
         mode,
         created: 0,
         duplicates: 0,
@@ -335,32 +529,26 @@ export async function POST(request: NextRequest) {
         totalChecked: allMessages.length,
         newChecked: 0,
         details: [],
-        lastScanAt: scanState?.last_scan_completed_at || null,
-      })
+        lastScanAt: new Date().toISOString(),
+      }
     }
 
-    // Fetch message details in parallel
     const msgResults = await Promise.all(
       newMessages.map(({ id: msgId }) =>
         fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`,
-          { headers: authHeader }
+          { headers: authHeader, signal: AbortSignal.timeout(20000) }
         ).then((r) => (r.ok ? r.json() : null))
       )
     )
 
-    // Process each message
-    interface AttachmentJob {
-      msgId: string
-      part: GmailPart
-      sender: string
-      subject: string
-      emailDate: string | null
-    }
+    progress.phase = 'prepare_attachments'
     const attachmentJobs: AttachmentJob[] = []
     let skipped = 0
 
     for (const msg of msgResults) {
+      progress.processedMessages += 1
+      report()
       if (!msg) {
         skipped++
         continue
@@ -372,18 +560,17 @@ export async function POST(request: NextRequest) {
       const dateStr = extractEmailHeader(headers, 'Date')
       const emailDate = dateStr ? new Date(dateStr).toISOString() : null
 
-      const parts: GmailPart[] = msg.payload?.parts || []
+      const candidateParts = collectAttachmentParts(msg.payload || {})
       const attachmentNames: string[] = []
       let foundAttachment = false
 
-      for (const part of parts) {
-        const isCandidate =
-          (part.mimeType === 'application/pdf' ||
-            part.mimeType?.startsWith('image/') ||
-            (part.filename || '').toLowerCase().endsWith('.pdf')) &&
-          part.body?.attachmentId
+      for (const part of candidateParts) {
+        const filename = part.filename || ''
+        const hasSupportedFile = isSupportedInvoiceFile(filename)
+        if (!hasSupportedFile) continue
+        if (isInlineDecorativeImage(part)) continue
+        if (isObviousNonInvoice(subject, sender, filename)) continue
 
-        if (!isCandidate) continue
         foundAttachment = true
         attachmentNames.push(part.filename || 'unknown')
         attachmentJobs.push({ msgId: msg.id, part, sender, subject, emailDate })
@@ -395,26 +582,42 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Process attachments in batches of 5
+    progress.totalAttachments = attachmentJobs.length
+    progress.phase = 'process_attachments'
+    report()
+
     const allDetails: (ProcessResult | null)[] = []
-    const emailInvoiceCounts = new Map<string, number>()
     const BATCH = 5
 
     for (let i = 0; i < attachmentJobs.length; i += BATCH) {
       const batch = attachmentJobs.slice(i, i + BATCH)
       const batchResults = await Promise.all(
         batch.map(async (job) => {
-          const result = await processAttachment(accessToken, job.msgId, job.part)
-          if (result?.status === 'created') {
-            emailInvoiceCounts.set(job.msgId, (emailInvoiceCounts.get(job.msgId) || 0) + 1)
-          }
+          const result = await processAttachment(
+            accessToken,
+            job.msgId,
+            job.part,
+            vendorCategoryMemory,
+            createdBy
+          )
           return { result, job }
         })
       )
 
       for (const { result, job } of batchResults) {
         allDetails.push(result)
-        // Record scanned email
+        progress.processedAttachments += 1
+        if (!result) {
+          progress.errors += 1
+        } else if (result.status === 'created') {
+          progress.created += 1
+        } else if (result.status === 'duplicate') {
+          progress.duplicates += 1
+        } else {
+          progress.errors += 1
+        }
+        report()
+
         await recordScannedEmail(
           job.msgId,
           job.emailDate,
@@ -427,10 +630,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    let created = 0,
-      duplicates = 0,
-      errors = 0
+    progress.phase = 'finalizing'
+    report()
+
+    let created = 0
+    let duplicates = 0
+    let errors = 0
     const details: ProcessResult[] = []
+
     for (const result of allDetails) {
       if (!result) {
         skipped++
@@ -442,11 +649,10 @@ export async function POST(request: NextRequest) {
       else if (result.status === 'error') errors++
     }
 
-    // Update scan state
     await updateScanState(newMessages.length, created)
 
-    return NextResponse.json({
-      status: 'ok',
+    return {
+      status: 'ok' as const,
       mode,
       created,
       duplicates,
@@ -457,9 +663,53 @@ export async function POST(request: NextRequest) {
       newChecked: newMessages.length,
       details,
       lastScanAt: new Date().toISOString(),
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ status: 'error', message })
+    }
   }
+
+  if (!streamProgress) {
+    try {
+      const result = await runScan()
+      if (isCronRun) {
+        console.info(
+          '[scan-gmail] auto-scan completed: created=%d duplicates=%d errors=%d',
+          result.created,
+          result.duplicates,
+          result.errors
+        )
+      }
+      return NextResponse.json(result)
+    } catch (err) {
+      console.error('[scan-gmail] error:', err)
+      return NextResponse.json({ status: 'error', message: 'סריקת המייל נכשלה' })
+    }
+  }
+
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: unknown) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+      }
+
+      try {
+        const result = await runScan((snapshot) => {
+          send({ type: 'progress', ...snapshot })
+        })
+        send({ type: 'result', data: result })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        send({ type: 'error', message })
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  })
 }

@@ -39,6 +39,18 @@ interface ScanStatus {
   totalTrackedEmails: number
 }
 
+interface ScanProgressEvent {
+  type: 'progress'
+  phase: 'search' | 'fetch_messages' | 'prepare_attachments' | 'process_attachments' | 'finalizing'
+  processedMessages: number
+  totalMessages: number
+  processedAttachments: number
+  totalAttachments: number
+  created: number
+  duplicates: number
+  errors: number
+}
+
 interface ScanGmailModalProps {
   onClose: () => void
   onDone: () => void
@@ -63,6 +75,8 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
   const [errorMsg, setErrorMsg] = useState('')
   const [scanInfo, setScanInfo] = useState<ScanStatus | null>(null)
   const [loadingInfo, setLoadingInfo] = useState(true)
+  const [scanProgress, setScanProgress] = useState(0)
+  const [progressInfo, setProgressInfo] = useState<ScanProgressEvent | null>(null)
 
   // Fetch scan status on mount
   useEffect(() => {
@@ -73,25 +87,94 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
       .finally(() => setLoadingInfo(false))
   }, [])
 
+  useEffect(() => {
+    if (status !== 'scanning') {
+      setScanProgress(0)
+      setProgressInfo(null)
+    }
+  }, [status])
+
   const handleScan = async () => {
     setStatus('scanning')
     setResult(null)
     setErrorMsg('')
+    setProgressInfo(null)
     try {
       const res = await fetch('/api/scan-gmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxMessages: mode === 'full' ? 100 : 50, mode }),
+        body: JSON.stringify({
+          maxMessages: mode === 'full' ? 200 : 100,
+          mode,
+          streamProgress: true,
+        }),
       })
-      const data = await res.json()
-      if (data.status === 'error') {
-        setErrorMsg(data.message || 'שגיאה לא ידועה')
+
+      if (!res.ok || !res.body) {
+        const fallback = await res.json().catch(() => ({}))
+        setErrorMsg(fallback.message || 'שגיאה בסריקה')
         setStatus('error')
-      } else {
-        setResult(data)
-        setStatus('done')
-        if (data.created > 0) onDone()
+        return
       }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalResult: ScanResult | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const event = JSON.parse(line) as
+            | ScanProgressEvent
+            | { type: 'result'; data: ScanResult }
+            | { type: 'error'; message: string }
+
+          if (event.type === 'progress') {
+            setProgressInfo(event)
+            const baseByPhase: Record<ScanProgressEvent['phase'], number> = {
+              search: 5,
+              fetch_messages: 20,
+              prepare_attachments: 35,
+              process_attachments: 45,
+              finalizing: 95,
+            }
+
+            if (event.phase === 'process_attachments' && event.totalAttachments > 0) {
+              const ratio = event.processedAttachments / event.totalAttachments
+              setScanProgress(Math.min(95, 45 + Math.round(ratio * 50)))
+            } else if (event.phase === 'prepare_attachments' && event.totalMessages > 0) {
+              const ratio = event.processedMessages / event.totalMessages
+              setScanProgress(Math.min(44, 35 + Math.round(ratio * 9)))
+            } else {
+              setScanProgress(baseByPhase[event.phase])
+            }
+          } else if (event.type === 'result') {
+            finalResult = event.data
+          } else if (event.type === 'error') {
+            setErrorMsg(event.message || 'שגיאה לא ידועה')
+            setStatus('error')
+            return
+          }
+        }
+      }
+
+      if (!finalResult) {
+        setErrorMsg('לא התקבלה תוצאת סריקה מהשרת')
+        setStatus('error')
+        return
+      }
+
+      setScanProgress(100)
+      setResult(finalResult)
+      setStatus('done')
+      if (finalResult.created > 0) onDone()
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'שגיאת רשת')
       setStatus('error')
@@ -177,8 +260,8 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
 
             <p className="text-white/40 text-xs text-center">
               {mode === 'quick'
-                ? 'סורק רק מיילים חדשים שלא נסרקו בעבר'
-                : 'סורק מחדש את כל המיילים (עד 100)'}
+                ? 'סורק רק מיילים חדשים מאז הסריקה האחרונה (ולא סורק שוב מייל שכבר נסרק)'
+                : 'סורק היסטורית את כל התיבה (מדלג על מיילים שכבר נסרקו)'}
             </p>
 
             <button
@@ -200,16 +283,26 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
           <div className="text-center py-6">
             <Loader2 className="w-10 h-10 text-blue-400 animate-spin mx-auto mb-4" />
             <p className="text-white font-medium mb-1">
-              {mode === 'quick' ? 'סורק מיילים חדשים...' : 'סורק את כל תיבת הדואר...'}
+              {mode === 'quick' ? 'סורק מיילים חדשים...' : 'סורק את כל התיבה היסטורית...'}
             </p>
             <p className="text-white/40 text-sm">
               {mode === 'quick'
                 ? 'מדלג על מיילים שכבר נסרקו'
-                : 'סורק מחדש את כל ההיסטוריה'}
+                : 'מדלג על מיילים שכבר נסרקו וכפילויות'}
             </p>
             <div className="mt-4 w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full animate-pulse w-2/3" />
+              <div
+                className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                style={{ width: `${scanProgress}%` }}
+              />
             </div>
+            <p className="text-[11px] text-white/40 mt-2">{scanProgress}%</p>
+            {progressInfo && (
+              <p className="text-[11px] text-white/40 mt-1">
+                {progressInfo.processedMessages}/{progressInfo.totalMessages} מיילים,{' '}
+                {progressInfo.processedAttachments}/{progressInfo.totalAttachments} קבצים
+              </p>
+            )}
           </div>
         )}
 
