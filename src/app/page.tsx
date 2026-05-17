@@ -1,9 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Tag } from 'lucide-react'
+import { Tag, LogOut, Mail, FolderCog, HardDrive } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { InvoiceEntity } from '@/lib/entities'
+import { createClient } from '@/lib/supabase/client'
+import { parseInvoiceDate } from '@/lib/date-utils'
+import {
+  isFolderWatchSupported,
+  loadFolderHandle,
+  runFolderScan,
+} from '@/lib/folder-watch'
 import StatsCards from '@/components/invoices/StatsCards'
 import UploadZone from '@/components/invoices/UploadZone'
 import InvoicesTable from '@/components/invoices/InvoicesTable'
@@ -12,20 +20,25 @@ import InvoiceFilters from '@/components/invoices/InvoiceFilters'
 import ExportToolbar from '@/components/invoices/ExportToolbar'
 import ScanGmailModal from '@/components/invoices/ScanGmailModal'
 import IncompleteInvoicesAlert from '@/components/invoices/IncompleteInvoicesAlert'
+import UnsentAccountantBanner from '@/components/invoices/UnsentAccountantBanner'
+import InstallBanner from '@/components/invoices/InstallBanner'
+import AccountantSettings from '@/components/invoices/AccountantSettings'
+import FolderWatchSettings from '@/components/invoices/FolderWatchSettings'
+import DriveBackupDialog from '@/components/invoices/DriveBackupDialog'
+
+interface ScanStatePayload {
+  lastEmailScanAt: string | null
+  lastFolderScanAt: string | null
+}
 
 export default function InvoicesPage() {
+  const router = useRouter()
   const queryClient = useQueryClient()
   const [showCategoryManager, setShowCategoryManager] = useState(false)
   const [showScanModal, setShowScanModal] = useState(false)
-  const [lastDownloadedAt, setLastDownloadedAt] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null
-    return localStorage.getItem('last_downloaded_at') || null
-  })
-
-  const handleDownloaded = (isoDate: string) => {
-    localStorage.setItem('last_downloaded_at', isoDate)
-    setLastDownloadedAt(isoDate)
-  }
+  const [showAccountantSettings, setShowAccountantSettings] = useState(false)
+  const [showFolderWatch, setShowFolderWatch] = useState(false)
+  const [showDriveBackup, setShowDriveBackup] = useState(false)
 
   const [filters, setFilters] = useState({
     vendor: '',
@@ -37,47 +50,93 @@ export default function InvoicesPage() {
 
   const { data: invoices = [], isLoading } = useQuery({
     queryKey: ['invoices'],
+    queryFn: () => InvoiceEntity.list('-created_at'),
+  })
+
+  const { data: scanState } = useQuery<ScanStatePayload>({
+    queryKey: ['scan-state'],
     queryFn: async () => {
-      const all = await InvoiceEntity.list('-created_at')
-      const zeros = all.filter((inv) => inv.total === 0)
-      if (zeros.length > 0) {
-        await Promise.all(zeros.map((inv) => InvoiceEntity.delete(inv.id)))
-        return all.filter((inv) => inv.total !== 0)
-      }
-      return all
+      const res = await fetch('/api/scan-state', { cache: 'no-store' })
+      if (!res.ok) return { lastEmailScanAt: null, lastFolderScanAt: null }
+      return res.json()
     },
+    refetchInterval: 60_000,
   })
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['invoices'] })
+    queryClient.invalidateQueries({ queryKey: ['scan-state'] })
   }
 
-  const parseDate = (str: string | null) => {
-    if (!str) return null
-    if (str.includes('/')) {
-      const [d, m, y] = str.split('/')
-      return new Date(`${y}-${m}-${d}`)
+  // Realtime: auto-refresh when invoices change on any device
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel('invoices-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'invoices' },
+        () => refresh()
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
     }
-    return new Date(str)
-  }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-scan watched folder while the page is open. Silent if permission
+  // is not granted — re-grant requires the user to click in the dialog.
+  const lastFolderScanAttempt = useRef<number>(0)
+  useEffect(() => {
+    if (!isFolderWatchSupported()) return
+
+    const TWELVE_HOURS = 12 * 60 * 60 * 1000
+
+    const attempt = async () => {
+      try {
+        const handle = await loadFolderHandle()
+        if (!handle) return
+        const perm = await handle.queryPermission({ mode: 'readwrite' })
+        if (perm !== 'granted') return
+        const now = Date.now()
+        if (now - lastFolderScanAttempt.current < TWELVE_HOURS) return
+        lastFolderScanAttempt.current = now
+
+        const list = await InvoiceEntity.list('-created_at')
+        const result = await runFolderScan(handle, list)
+        if (result.created > 0) {
+          refresh()
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['scan-state'] })
+        }
+      } catch {
+        /* silent — user will see errors when they open the dialog */
+      }
+    }
+
+    attempt()
+    const id = setInterval(attempt, 60 * 60 * 1000) // probe hourly
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredInvoices = invoices.filter((inv) => {
     if (filters.vendor && !inv.vendor?.toLowerCase().includes(filters.vendor.toLowerCase()))
       return false
     if (filters.category && inv.category !== filters.category) return false
     if (filters.dateFrom) {
-      const invDate = parseDate(inv.date)
+      const invDate = parseInvoiceDate(inv.date)
       if (!invDate || invDate < new Date(filters.dateFrom)) return false
     }
     if (filters.dateTo) {
-      const invDate = parseDate(inv.date)
+      const invDate = parseInvoiceDate(inv.date)
       if (!invDate || invDate > new Date(filters.dateTo)) return false
     }
     return true
   })
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950" dir="rtl">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 overflow-x-hidden" dir="rtl">
       <div className="w-full px-3 sm:px-6 lg:px-10 py-6 sm:py-8 space-y-4 sm:space-y-6">
         {/* Header */}
         <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" dir="rtl">
@@ -92,37 +151,65 @@ export default function InvoicesPage() {
               העלה חשבוניות PDF וצפה בנתונים שחולצו אוטומטית
             </p>
           </div>
-          <div className="flex items-center gap-2 justify-end">
+          <div className="flex flex-wrap items-center gap-2 justify-end">
             <button
               onClick={() => setShowScanModal(true)}
-              className="flex items-center gap-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-300 hover:text-blue-200 text-sm font-medium px-3 py-2 rounded-xl transition-all"
+              title="סרוק מייל"
+              className="flex items-center gap-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-300 hover:text-blue-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
             >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                />
-              </svg>
+              <Mail className="w-4 h-4" />
               <span className="hidden sm:inline">סרוק מייל</span>
             </button>
             <button
+              onClick={() => setShowFolderWatch(true)}
+              title="סריקת תיקייה"
+              className="flex items-center gap-2 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-300 hover:text-violet-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+            >
+              <FolderCog className="w-4 h-4" />
+              <span className="hidden sm:inline">סריקת תיקייה</span>
+            </button>
+            <button
+              onClick={() => setShowAccountantSettings(true)}
+              title="רואה חשבון"
+              className="flex items-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+            >
+              <Mail className="w-4 h-4" />
+              <span className="hidden sm:inline">רואה חשבון</span>
+            </button>
+            <button
+              onClick={() => setShowDriveBackup(true)}
+              title="גיבוי לדרייב"
+              className="flex items-center gap-2 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+            >
+              <HardDrive className="w-4 h-4" />
+              <span className="hidden sm:inline">גיבוי לדרייב</span>
+            </button>
+            <button
               onClick={() => setShowCategoryManager(true)}
-              className="flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 hover:text-white text-sm font-medium px-3 py-2 rounded-xl transition-all"
+              title="ניהול קטגוריות"
+              className="flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 hover:text-white text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
             >
               <Tag className="w-4 h-4" />
               <span className="hidden sm:inline">ניהול קטגוריות</span>
             </button>
+            <button
+              onClick={async () => {
+                await fetch('/api/auth/logout', { method: 'POST' })
+                router.push('/login')
+              }}
+              className="flex items-center gap-2 bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/30 text-white/50 hover:text-red-300 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+              title="התנתק"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
-        <StatsCards invoices={invoices} lastDownloadedAt={lastDownloadedAt} />
+        <StatsCards
+          invoices={invoices}
+          lastEmailScanAt={scanState?.lastEmailScanAt ?? null}
+          lastFolderScanAt={scanState?.lastFolderScanAt ?? null}
+        />
 
         <UploadZone onInvoiceExtracted={refresh} existingInvoices={invoices} />
 
@@ -130,10 +217,9 @@ export default function InvoicesPage() {
 
         <IncompleteInvoicesAlert invoices={invoices} onRefresh={refresh} categories={categories} />
 
-        <ExportToolbar
-          filteredInvoices={filteredInvoices}
-          onDownloaded={handleDownloaded}
-        />
+        <UnsentAccountantBanner invoices={invoices} onRefresh={refresh} />
+
+        <ExportToolbar filteredInvoices={filteredInvoices} />
 
         {filteredInvoices.length > 0 && (
           <div className="flex items-center justify-start">
@@ -162,6 +248,23 @@ export default function InvoicesPage() {
       {showScanModal && (
         <ScanGmailModal onClose={() => setShowScanModal(false)} onDone={refresh} />
       )}
+
+      {showAccountantSettings && (
+        <AccountantSettings onClose={() => setShowAccountantSettings(false)} />
+      )}
+
+      {showFolderWatch && (
+        <FolderWatchSettings
+          onClose={() => setShowFolderWatch(false)}
+          onScanned={refresh}
+        />
+      )}
+
+      {showDriveBackup && (
+        <DriveBackupDialog onClose={() => setShowDriveBackup(false)} />
+      )}
+
+      <InstallBanner />
     </div>
   )
 }

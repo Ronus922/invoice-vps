@@ -1,6 +1,6 @@
 'use client'
 
-import { FileCheck, TrendingUp, Clock, Download } from 'lucide-react'
+import { FileCheck, Mail, FolderSync } from 'lucide-react'
 import type { Invoice } from '@/lib/entities'
 
 interface CardDef {
@@ -9,8 +9,26 @@ interface CardDef {
   icon: typeof FileCheck
   gradient: string
   glow: string
-  getValue: (invoices: Invoice[], extra: { lastDownloadedAt: string | null }) => string | number
-  getSub: (invoices: Invoice[], extra: { lastDownloadedAt: string | null }) => string
+  getValue: (invoices: Invoice[], extra: StatsExtras) => string | number
+  getSub: (invoices: Invoice[], extra: StatsExtras) => string
+}
+
+interface StatsExtras {
+  lastEmailScanAt: string | null
+  lastFolderScanAt: string | null
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('he-IL')
+}
+
+function formatTime(iso: string | null): string {
+  if (!iso) return 'טרם בוצעה סריקה'
+  return new Date(iso).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 const cards: CardDef[] = [
@@ -24,79 +42,61 @@ const cards: CardDef[] = [
     getSub: (invoices) => `${invoices.length} קבצים במערכת`,
   },
   {
-    key: 'total',
-    label: 'סה"כ הוצאות',
-    icon: TrendingUp,
-    gradient: 'from-blue-500 to-cyan-500',
-    glow: 'shadow-blue-500/25',
-    getValue: (invoices) => {
-      const sum = invoices.reduce((acc, inv) => acc + (inv.total || 0), 0)
-      return `₪${sum.toLocaleString('he-IL', { minimumFractionDigits: 0 })}`
-    },
-    getSub: () => 'כולל מע"מ',
-  },
-  {
-    key: 'lastRun',
-    label: 'הרצה אחרונה',
-    icon: Clock,
+    key: 'lastEmailScan',
+    label: 'סריקת מייל אחרונה',
+    icon: Mail,
     gradient: 'from-amber-500 to-orange-500',
     glow: 'shadow-amber-500/25',
-    getValue: (invoices) => {
-      if (invoices.length === 0) return '—'
-      const sorted = [...invoices].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )
-      return new Date(sorted[0].created_at).toLocaleDateString('he-IL')
-    },
-    getSub: () => 'סריקה אוטומטית',
+    getValue: (_invoices, extra) => formatDate(extra.lastEmailScanAt),
+    getSub: (_invoices, extra) => formatTime(extra.lastEmailScanAt),
   },
   {
-    key: 'lastDownload',
-    label: 'הורדה אחרונה',
-    icon: Download,
-    gradient: 'from-purple-500 to-violet-500',
-    glow: 'shadow-purple-500/25',
-    getValue: (_invoices, extra) => {
-      if (!extra?.lastDownloadedAt) return '—'
-      return new Date(extra.lastDownloadedAt).toLocaleDateString('he-IL')
-    },
-    getSub: (_invoices, extra) => {
-      if (!extra?.lastDownloadedAt) return 'טרם בוצעה הורדה'
-      return new Date(extra.lastDownloadedAt).toLocaleTimeString('he-IL', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    },
+    key: 'lastFolderScan',
+    label: 'סריקת תיקייה אחרונה',
+    icon: FolderSync,
+    gradient: 'from-violet-500 to-purple-500',
+    glow: 'shadow-violet-500/25',
+    getValue: (_invoices, extra) => formatDate(extra.lastFolderScanAt),
+    getSub: (_invoices, extra) => formatTime(extra.lastFolderScanAt),
   },
 ]
 
 interface StatsCardsProps {
   invoices: Invoice[]
-  lastDownloadedAt: string | null
+  lastEmailScanAt: string | null
+  lastFolderScanAt: string | null
 }
 
-export default function StatsCards({ invoices = [], lastDownloadedAt }: StatsCardsProps) {
-  const extra = { lastDownloadedAt }
+export default function StatsCards({
+  invoices = [],
+  lastEmailScanAt,
+  lastFolderScanAt,
+}: StatsCardsProps) {
+  const extra: StatsExtras = { lastEmailScanAt, lastFolderScanAt }
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
       {cards.map((card) => {
         const Icon = card.icon
         return (
           <div
             key={card.key}
-            className={`relative bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl p-5 shadow-xl ${card.glow} hover:bg-white/15 transition-all duration-300 hover:-translate-y-0.5`}
+            className={`relative bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl p-4 sm:p-5 shadow-xl ${card.glow} hover:bg-white/15 transition-all duration-300 hover:-translate-y-0.5`}
           >
-            <div className="flex items-start justify-between mb-4">
-              <div className="text-right flex-1">
-                <p className="text-xs text-white/60 font-medium mb-1">{card.label}</p>
-                <p className="text-2xl font-bold text-white">{card.getValue(invoices, extra)}</p>
-              </div>
-              <div className={`bg-gradient-to-br ${card.gradient} p-2.5 rounded-xl shadow-lg ml-3 flex-shrink-0`}>
+            <div className="flex items-start gap-3 mb-2">
+              <div
+                className={`bg-gradient-to-br ${card.gradient} p-2.5 rounded-xl shadow-lg flex-shrink-0`}
+              >
                 <Icon className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white/60 font-medium mb-1 truncate">{card.label}</p>
+                <p className="text-2xl font-bold text-white">{card.getValue(invoices, extra)}</p>
               </div>
             </div>
             <p className="text-xs text-white/40">{card.getSub(invoices, extra)}</p>
-            <div className={`absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r ${card.gradient} rounded-b-2xl opacity-60`} />
+            <div
+              className={`absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r ${card.gradient} rounded-b-2xl opacity-60`}
+            />
           </div>
         )
       })}

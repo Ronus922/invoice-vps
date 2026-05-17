@@ -3,16 +3,13 @@
 import { useState } from 'react'
 import { Download, Printer, Loader2, FileSpreadsheet } from 'lucide-react'
 import type { Invoice } from '@/lib/entities'
+import { currencySymbol } from '@/lib/format'
 
 interface ExportToolbarProps {
   filteredInvoices: Invoice[]
-  onDownloaded?: (isoDate: string) => void
 }
 
-export default function ExportToolbar({
-  filteredInvoices = [],
-  onDownloaded,
-}: ExportToolbarProps) {
+export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarProps) {
   const [isZipping, setIsZipping] = useState(false)
 
   const filesCount = filteredInvoices.filter((i) => i.file_url).length
@@ -28,14 +25,21 @@ export default function ExportToolbar({
         <td>${inv.vendor || '—'}</td>
         <td>${inv.doc_number || '—'}</td>
         <td>${inv.description || '—'}</td>
-        <td>₪${(inv.total || 0).toLocaleString('he-IL')}</td>
+        <td>${currencySymbol(inv.currency)}${(inv.total || 0).toLocaleString('he-IL')}</td>
         <td>${inv.payment_method || '—'}</td>
         <td>${inv.category || '—'}</td>
       </tr>`
       )
       .join('')
 
-    const total = filteredInvoices.reduce((acc, inv) => acc + (inv.total || 0), 0)
+    const totalsByCurrency = new Map<string, number>()
+    for (const inv of filteredInvoices) {
+      const code = (inv.currency || 'ILS').toUpperCase()
+      totalsByCurrency.set(code, (totalsByCurrency.get(code) ?? 0) + (inv.total || 0))
+    }
+    const totalsLabel = [...totalsByCurrency.entries()]
+      .map(([code, sum]) => `${currencySymbol(code)}${sum.toLocaleString('he-IL')}`)
+      .join(' + ')
 
     const html = `
       <!DOCTYPE html><html dir="rtl"><head>
@@ -54,7 +58,7 @@ export default function ExportToolbar({
       <table>
         <thead><tr><th>תאריך</th><th>ספק</th><th>מס'</th><th>תיאור</th><th>סה"כ</th><th>תשלום</th><th>קטגוריה</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr><td colspan="4">סה"כ (${filteredInvoices.length} חשבוניות)</td><td>₪${total.toLocaleString('he-IL')}</td><td colspan="2"></td></tr></tfoot>
+        <tfoot><tr><td colspan="4">סה"כ (${filteredInvoices.length} חשבוניות)</td><td>${totalsLabel}</td><td colspan="2"></td></tr></tfoot>
       </table>
       </body></html>`
 
@@ -74,6 +78,7 @@ export default function ExportToolbar({
       'ספק',
       "מס' חשבונית",
       'תיאור',
+      'מטבע',
       'לפני מע"מ',
       'מע"מ',
       'סה"כ',
@@ -85,6 +90,7 @@ export default function ExportToolbar({
       inv.vendor || '',
       inv.doc_number || '',
       inv.description || '',
+      inv.currency || 'ILS',
       inv.pretax ?? '',
       inv.vat ?? '',
       inv.total ?? '',
@@ -139,15 +145,13 @@ export default function ExportToolbar({
       a.download = `חשבוניות_${new Date().toLocaleDateString('he-IL').replace(/\//g, '-')}.zip`
       a.click()
       URL.revokeObjectURL(a.href)
-
-      if (onDownloaded) onDownloaded(new Date().toISOString())
     } finally {
       setIsZipping(false)
     }
   }
 
   return (
-    <div className="flex gap-2 flex-wrap" dir="rtl">
+    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2" dir="rtl">
       <button
         onClick={handleZip}
         disabled={isZipping || filesCount === 0}
@@ -171,7 +175,7 @@ export default function ExportToolbar({
       <button
         onClick={handlePrint}
         disabled={filteredInvoices.length === 0}
-        className="flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/70 hover:text-white text-sm font-medium px-4 py-2 rounded-xl transition-all disabled:opacity-40"
+        className="col-span-2 sm:col-span-1 flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/70 hover:text-white text-sm font-medium px-4 py-2 rounded-xl transition-all disabled:opacity-40"
       >
         <Printer className="w-4 h-4" />
         הדפסה ({filteredInvoices.length})

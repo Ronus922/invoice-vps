@@ -14,6 +14,10 @@ import {
 } from 'lucide-react'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { uploadFile } from '@/lib/upload'
+import {
+  applyRememberedCategory,
+  rememberVendorCategory,
+} from '@/lib/vendor-category-memory'
 
 interface QueueItem {
   file: File
@@ -84,7 +88,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             continue
           }
 
-          const extracted = await res.json()
+          const extracted = applyRememberedCategory(await res.json())
 
           const isDuplicate = existingRef.current.some(
             (inv) => inv.doc_number === extracted.doc_number && inv.vendor === extracted.vendor
@@ -106,11 +110,34 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             file_name: item.file.name,
             source: 'manual',
           })
+          if (extracted.vendor && extracted.category) {
+            rememberVendorCategory(extracted.vendor, extracted.category)
+          }
           onInvoiceExtracted()
+
+          const needsReview = Boolean(extracted.needs_review)
+          if (!needsReview) {
+            // Fire-and-forget: send to accountant only when arithmetic checks out.
+            fetch('/api/send-to-accountant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                file_url: fileUrl,
+                vendor: extracted.vendor || '',
+                date: extracted.date || '',
+              }),
+            }).catch(() => {})
+          }
           setQueue((prev) =>
             prev.map((q) =>
               q === item || (q.name === item.name && q.status === 'processing')
-                ? { ...q, status: 'done', message: extracted.vendor || '' }
+                ? {
+                    ...q,
+                    status: 'done',
+                    message: needsReview
+                      ? `נדרשת בדיקת סכומים — לא נשלח לרו"ח`
+                      : extracted.vendor || '',
+                  }
                 : q
             )
           )
@@ -198,7 +225,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
         type="file"
         accept=".pdf,image/*"
         multiple
-        style={{ position: 'fixed', top: -9999, left: -9999, opacity: 0 }}
+        className="sr-only"
         onChange={handleFileSelect}
       />
       <input
@@ -206,7 +233,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
         type="file"
         accept="image/*"
         capture="environment"
-        style={{ position: 'fixed', top: -9999, left: -9999, opacity: 0 }}
+        className="sr-only"
         onChange={handleFileSelect}
       />
 
@@ -305,7 +332,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
                 {item.status === 'pending' && (
                   <button
                     onClick={() => removeFromQueue(idx)}
-                    className="text-white/20 hover:text-white/60 flex-shrink-0"
+                    className="text-white/20 hover:text-white/60 flex-shrink-0 p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>

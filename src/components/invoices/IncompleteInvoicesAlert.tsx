@@ -54,7 +54,8 @@ export default function IncompleteInvoicesAlert({
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const incomplete = invoices.filter(
-    (inv) => looksLikeInvoice(inv) && getMissingFields(inv).length > 0
+    (inv) =>
+      inv.needs_review || (looksLikeInvoice(inv) && getMissingFields(inv).length > 0)
   )
   const allSelected = incomplete.length > 0 && selected.size === incomplete.length
 
@@ -148,6 +149,12 @@ export default function IncompleteInvoicesAlert({
               {incomplete.map((inv) => {
                 const missing = getMissingFields(inv)
                 const isSelected = selected.has(inv.id)
+                const reviewIssue = inv.needs_review
+                  ? inv.validation_error || 'נדרשת בדיקת סכומים'
+                  : null
+                const issueLine =
+                  reviewIssue ||
+                  (missing.length > 0 ? `חסר: ${missing.join(', ')}` : null)
                 return (
                   <div
                     key={inv.id}
@@ -164,30 +171,39 @@ export default function IncompleteInvoicesAlert({
                         <p className="text-sm text-white/80 font-medium truncate">
                           {inv.vendor || inv.doc_number || 'חשבונית ללא שם'}
                         </p>
-                        <p className="text-xs text-amber-400/80 mt-0.5">
-                          חסר: {missing.join(', ')}
-                        </p>
+                        {issueLine && (
+                          <p
+                            className={`text-xs mt-0.5 ${reviewIssue ? 'text-red-300' : 'text-amber-400/80'}`}
+                          >
+                            {issueLine}
+                          </p>
+                        )}
                       </div>
+                      {reviewIssue && (
+                        <span className="flex-shrink-0 text-xs bg-red-500/20 text-red-300 border border-red-500/30 px-2 py-0.5 rounded-full">
+                          סכומים
+                        </span>
+                      )}
                       {inv.source === 'gmail' && (
                         <span className="flex-shrink-0 text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full">
                           מייל
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0 mr-3">
+                    <div className="flex items-center gap-2 flex-shrink-0 mr-2">
                       <button
                         onClick={() => setEditingInvoice(inv)}
-                        className="flex items-center gap-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
+                        className="flex items-center gap-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-medium px-3 py-2 rounded-lg transition-all min-h-[44px]"
                       >
                         <Pencil className="w-3.5 h-3.5" />
-                        השלם
+                        <span className="hidden sm:inline">השלם</span>
                       </button>
                       <button
                         onClick={() => setDeletingInvoice(inv)}
-                        className="flex items-center gap-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400 hover:text-red-300 text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
+                        className="flex items-center gap-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400 hover:text-red-300 text-xs font-medium px-3 py-2 rounded-lg transition-all min-h-[44px]"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        מחק
+                        <span className="hidden sm:inline">מחק</span>
                       </button>
                     </div>
                   </div>

@@ -20,7 +20,12 @@ import {
 } from '@/components/ui/select'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { uploadFile } from '@/lib/upload'
-import { Loader2, Paperclip, ExternalLink, X, Upload } from 'lucide-react'
+import { currencySymbol } from '@/lib/format'
+import { Loader2, Paperclip, ExternalLink, X, Upload, AlertTriangle } from 'lucide-react'
+import {
+  getRememberedCategory,
+  rememberVendorCategory,
+} from '@/lib/vendor-category-memory'
 
 const PAYMENT_METHODS = [
   'אשראי',
@@ -32,15 +37,26 @@ const PAYMENT_METHODS = [
   'אחר',
 ]
 
-const fields = [
-  { key: 'date', label: 'תאריך', type: 'text', placeholder: 'DD/MM/YYYY' },
-  { key: 'vendor', label: 'שם הספק', type: 'text', placeholder: '' },
-  { key: 'doc_number', label: 'מספר חשבונית', type: 'text', placeholder: '' },
-  { key: 'description', label: 'תיאור', type: 'text', placeholder: '' },
-  { key: 'pretax', label: 'לפני מע"מ ₪', type: 'number', placeholder: '' },
-  { key: 'vat', label: 'מע"מ ₪', type: 'number', placeholder: '' },
-  { key: 'total', label: 'סה"כ ₪', type: 'number', placeholder: '' },
+const CURRENCIES = [
+  { code: 'ILS', label: '₪ שקל (ILS)' },
+  { code: 'USD', label: '$ דולר (USD)' },
+  { code: 'EUR', label: '€ יורו (EUR)' },
+  { code: 'GBP', label: '£ ליש"ט (GBP)' },
+  { code: 'JPY', label: '¥ ין (JPY)' },
 ]
+
+function buildFields(currency: string) {
+  const sym = currencySymbol(currency)
+  return [
+    { key: 'date', label: 'תאריך', type: 'text', placeholder: 'DD/MM/YYYY' },
+    { key: 'vendor', label: 'שם הספק', type: 'text', placeholder: '' },
+    { key: 'doc_number', label: 'מספר חשבונית', type: 'text', placeholder: '' },
+    { key: 'description', label: 'תיאור', type: 'text', placeholder: '' },
+    { key: 'pretax', label: `לפני מע"מ ${sym}`, type: 'number', placeholder: '' },
+    { key: 'vat', label: `מע"מ ${sym}`, type: 'number', placeholder: '' },
+    { key: 'total', label: `סה"כ ${sym}`, type: 'number', placeholder: '' },
+  ]
+}
 
 interface EditInvoiceDialogProps {
   invoice: Invoice
@@ -57,7 +73,7 @@ export default function EditInvoiceDialog({
   onSaved,
   categories = [],
 }: EditInvoiceDialogProps) {
-  const [form, setForm] = useState<Record<string, string | number | null>>({})
+  const [form, setForm] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -66,8 +82,21 @@ export default function EditInvoiceDialog({
     if (invoice) setForm({ ...invoice })
   }, [invoice])
 
-  const handleChange = (key: string, value: string | number | null) =>
-    setForm((prev) => ({ ...prev, [key]: value }))
+  const handleChange = (key: string, value: unknown) =>
+    setForm((prev) => {
+      const next: Record<string, unknown> = { ...prev, [key]: value }
+
+      if (key === 'vendor') {
+        const vendorValue = String(value || '').trim()
+        const currentCategory = String(next.category || '').trim()
+        if (vendorValue && !currentCategory) {
+          const remembered = getRememberedCategory(vendorValue)
+          if (remembered) next.category = remembered
+        }
+      }
+
+      return next
+    })
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -94,11 +123,17 @@ export default function EditInvoiceDialog({
         pretax: parseFloat(String(form.pretax)) || 0,
         vat: parseFloat(String(form.vat)) || 0,
         total: parseFloat(String(form.total)) || 0,
+        currency: (form.currency as string) || 'ILS',
         payment_method: (form.payment_method as string) || null,
         category: (form.category as string) || null,
         file_url: (form.file_url as string) || null,
         file_name: (form.file_name as string) || null,
       } as Partial<Invoice>)
+      const vendor = String(form.vendor || '').trim()
+      const category = String(form.category || '').trim()
+      if (vendor && category) {
+        rememberVendorCategory(vendor, category)
+      }
       onSaved()
       onClose()
     } finally {
@@ -113,9 +148,24 @@ export default function EditInvoiceDialog({
           <DialogTitle className="text-right">עריכת חשבונית</DialogTitle>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-4 py-4">
-          {fields.map((f) => (
-            <div key={f.key} className={f.key === 'description' ? 'col-span-2' : ''}>
+        {invoice.needs_review && (
+          <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 text-right">
+            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-red-300">
+              <p className="font-semibold">חשבונית סומנה לבדיקה</p>
+              <p className="text-xs text-red-300/80 mt-0.5">
+                {invoice.validation_error || 'אי-התאמה בין לפני מע״מ + מע״מ לסה״כ. ודא את הסכומים מול האסמכתא לפני שמירה.'}
+              </p>
+              <p className="text-xs text-red-300/60 mt-0.5">
+                החשבונית לא נשלחה לרו״ח עד תיקון.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+          {buildFields((form.currency as string) || 'ILS').map((f) => (
+            <div key={f.key} className={f.key === 'description' ? 'sm:col-span-2' : ''}>
               <Label className="text-xs text-gray-500 mb-1 block text-right">{f.label}</Label>
               <Input
                 type={f.type}
@@ -127,6 +177,25 @@ export default function EditInvoiceDialog({
               />
             </div>
           ))}
+
+          <div>
+            <Label className="text-xs text-gray-500 mb-1 block text-right">מטבע</Label>
+            <Select
+              value={(form.currency as string) || 'ILS'}
+              onValueChange={(v) => handleChange('currency', v)}
+            >
+              <SelectTrigger className="text-right" dir="rtl">
+                <SelectValue placeholder="בחר..." />
+              </SelectTrigger>
+              <SelectContent>
+                {CURRENCIES.map((c) => (
+                  <SelectItem key={c.code} value={c.code}>
+                    {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           <div>
             <Label className="text-xs text-gray-500 mb-1 block text-right">אמצעי תשלום</Label>
@@ -167,7 +236,7 @@ export default function EditInvoiceDialog({
           </div>
 
           {/* File attachment */}
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label className="text-xs text-gray-500 mb-1 block text-right">
               אסמכתא (PDF / תמונה)
             </Label>

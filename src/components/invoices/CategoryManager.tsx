@@ -1,15 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, X, Tag, Pencil } from 'lucide-react'
+import { Plus, X, Tag, Pencil, Check, RotateCcw } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 
 const DEFAULT_CATEGORIES = [
   'תוכנה',
@@ -108,80 +107,135 @@ export default function CategoryManager({
     }
   }
 
+  const handleReset = () => {
+    localStorage.removeItem(STORAGE_KEY)
+    DEFAULT_CATEGORIES.forEach((cat) => {
+      if (!categories.includes(cat)) onAdd(cat)
+    })
+  }
+
+  const isCustom = (cat: string) => !DEFAULT_CATEGORIES.includes(cat)
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-sm" dir="rtl">
         <DialogHeader>
-          <DialogTitle className="text-right flex items-center gap-2 justify-end">
+          <DialogTitle className="text-right flex items-center gap-2.5 justify-end">
             <span>ניהול קטגוריות</span>
-            <Tag className="w-4 h-4" />
+            <div className="bg-blue-500/20 p-1.5 rounded-lg">
+              <Tag className="w-4 h-4 text-blue-400" />
+            </div>
           </DialogTitle>
+          <DialogDescription className="text-right">
+            {categories.length} קטגוריות פעילות
+          </DialogDescription>
         </DialogHeader>
 
         {/* Add new */}
-        <div className="flex gap-2 mt-2" dir="rtl">
-          <Input
-            value={newCat}
-            onChange={(e) => {
-              setNewCat(e.target.value)
-              setError('')
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-            placeholder="שם קטגוריה חדשה..."
-            className="text-right"
-            dir="rtl"
-          />
-          <Button onClick={handleAdd} size="sm" className="flex-shrink-0">
+        <div className="flex gap-2" dir="rtl">
+          <div className="relative flex-1">
+            <input
+              value={newCat}
+              onChange={(e) => {
+                setNewCat(e.target.value)
+                setError('')
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+              placeholder="הוסף קטגוריה חדשה..."
+              className="w-full bg-white/5 border border-white/15 text-white placeholder:text-white/30 text-sm rounded-xl px-3 py-2.5 text-right focus:outline-none focus:border-blue-400/50 focus:ring-1 focus:ring-blue-400/20 transition-all"
+              dir="rtl"
+            />
+          </div>
+          <button
+            onClick={handleAdd}
+            disabled={!newCat.trim()}
+            className="flex-shrink-0 bg-blue-500 hover:bg-blue-600 disabled:bg-white/10 disabled:text-white/20 text-white rounded-xl px-3 py-2.5 transition-all"
+          >
             <Plus className="w-4 h-4" />
-          </Button>
+          </button>
         </div>
-        {error && <p className="text-xs text-red-500 text-right">{error}</p>}
+        {error && (
+          <p className="text-xs text-amber-400 text-right -mt-1">{error}</p>
+        )}
 
         {/* List */}
-        <div className="max-h-64 overflow-y-auto space-y-1.5 mt-3">
+        <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-1" dir="rtl">
           {categories.map((cat) => (
             <div
               key={cat}
-              className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg group"
+              className="group flex items-center gap-2 px-3 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-transparent hover:border-white/10 rounded-xl transition-all"
               dir="rtl"
             >
               {editingCat === cat ? (
-                <Input
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleEditSave(cat)
-                    if (e.key === 'Escape') setEditingCat(null)
-                  }}
-                  onBlur={() => handleEditSave(cat)}
-                  className="h-7 text-sm text-right flex-1 ml-2"
-                  dir="rtl"
-                  autoFocus
-                />
+                <>
+                  <input
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleEditSave(cat)
+                      if (e.key === 'Escape') setEditingCat(null)
+                    }}
+                    className="flex-1 bg-white/10 border border-blue-400/30 text-white text-sm rounded-lg px-2.5 py-1 text-right focus:outline-none focus:border-blue-400/50"
+                    dir="rtl"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => handleEditSave(cat)}
+                    className="text-emerald-400 hover:text-emerald-300 p-1 rounded-lg hover:bg-emerald-500/10 transition-all"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setEditingCat(null)}
+                    className="text-white/30 hover:text-white/60 p-1 rounded-lg hover:bg-white/5 transition-all"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </>
               ) : (
-                <span className="text-sm text-gray-700 flex-1">{cat}</span>
+                <>
+                  <span className="flex-1 text-sm text-white/80">{cat}</span>
+                  {isCustom(cat) && (
+                    <span className="text-[10px] text-blue-400/60 bg-blue-500/10 px-1.5 py-0.5 rounded-md">
+                      מותאם
+                    </span>
+                  )}
+                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => handleEdit(cat)}
+                      className="text-white/30 hover:text-blue-400 p-1 rounded-lg hover:bg-blue-500/10 transition-all"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onRemove(cat)}
+                      className="text-white/30 hover:text-red-400 p-1 rounded-lg hover:bg-red-500/10 transition-all"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </>
               )}
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                <button
-                  onClick={() => handleEdit(cat)}
-                  className="text-gray-400 hover:text-blue-500 transition-colors p-0.5"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => onRemove(cat)}
-                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
             </div>
           ))}
         </div>
 
-        <Button variant="outline" onClick={onClose} className="mt-2 w-full">
-          סגור
-        </Button>
+        {/* Footer */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-all"
+          >
+            סגור
+          </button>
+          <button
+            onClick={handleReset}
+            className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 text-xs transition-all"
+          >
+            <RotateCcw className="w-3 h-3" />
+            איפוס
+          </button>
+        </div>
       </DialogContent>
     </Dialog>
   )
