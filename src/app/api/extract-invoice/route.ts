@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { parseExtractedJson } from '@/lib/ai-json-parse'
+import {
+  INVOICE_EXTRACTION_PROMPT,
+  INVOICE_EXTRACTION_MODEL,
+  INVOICE_EXTRACTION_MAX_TOKENS,
+} from '@/lib/invoice-extraction-prompt'
+import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
+import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
+import { normalizeCurrency } from '@/lib/format'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export async function POST(request: NextRequest) {
+  const user = await getAuthenticatedUser()
+  if (!user) return unauthorizedResponse()
+
   try {
     const { file_url } = await request.json()
 
@@ -11,78 +23,93 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'file_url is required' }, { status: 400 })
     }
 
-    // Download the file
-    const response = await fetch(file_url)
+    const response = await fetch(file_url, { signal: AbortSignal.timeout(20000) })
     if (!response.ok) {
-      return NextResponse.json({ error: 'Failed to download file' }, { status: 500 })
+      return NextResponse.json({ error: 'הורדת הקובץ נכשלה' }, { status: 500 })
     }
 
     const buffer = await response.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')
-    const isPdf = file_url.toLowerCase().endsWith('.pdf')
-    const mediaType = isPdf ? 'application/pdf' : 'image/jpeg'
+    const contentType = response.headers.get('content-type') || ''
+    const isPdf = file_url.toLowerCase().endsWith('.pdf') || contentType.includes('pdf')
 
-    type ContentBlock =
-      | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
-      | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
-      | { type: 'text'; text: string }
+    type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+    let imageMediaType: ImageMediaType = 'image/jpeg'
+    if (contentType.includes('png')) imageMediaType = 'image/png'
+    else if (contentType.includes('webp')) imageMediaType = 'image/webp'
+    else if (contentType.includes('gif')) imageMediaType = 'image/gif'
 
-    const contentBlocks: ContentBlock[] = [
-      isPdf
-        ? {
-            type: 'document' as const,
-            source: { type: 'base64' as const, media_type: mediaType, data: base64 },
-          }
-        : {
-            type: 'image' as const,
-            source: { type: 'base64' as const, media_type: mediaType, data: base64 },
-          },
-      {
-        type: 'text' as const,
-        text: `Extract invoice data from this document. Return ONLY a JSON object with these fields:
-{
-  "date": "DD/MM/YYYY format",
-  "vendor": "vendor/supplier name in Hebrew if possible",
-  "doc_number": "invoice/receipt number",
-  "description": "short description in Hebrew",
-  "pretax": number (amount before VAT in NIS),
-  "vat": number (VAT amount in NIS),
-  "total": number (total including VAT in NIS),
-  "payment_method": "payment method in Hebrew if visible (e.g. אשראי, העברה בנקאית, מזומן)",
-  "category": "one of: תוכנה, ענן, חשמל, ציוד משרדי, שירותים, תקשורת, ביטוח, שכירות, משלוח, שיווק, הדרכה, תחזוקה, נסיעות, אירוח, אחר"
-}
-Return ONLY valid JSON, no markdown code fences.`,
-      },
-    ]
+    const fileBlock = isPdf
+      ? {
+          type: 'document' as const,
+          source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+        }
+      : {
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: imageMediaType, data: base64 },
+        }
 
     const result = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: INVOICE_EXTRACTION_MODEL,
+      max_tokens: INVOICE_EXTRACTION_MAX_TOKENS,
       messages: [
         {
           role: 'user',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          content: contentBlocks as any,
+          content: [fileBlock, { type: 'text', text: INVOICE_EXTRACTION_PROMPT }],
         },
       ],
     })
 
     const textBlock = result.content.find((b) => b.type === 'text')
     const text = textBlock && 'text' in textBlock ? textBlock.text : ''
+    const stopReason = result.stop_reason
 
     try {
-      // Try to parse, stripping possible markdown fences
-      const cleaned = text.replace(/```json?\n?/g, '').replace(/```\n?/g, '').trim()
-      const data = JSON.parse(cleaned)
-      return NextResponse.json(data)
-    } catch {
-      return NextResponse.json(
-        { error: 'Failed to parse AI extraction result', raw: text },
-        { status: 500 }
-      )
+      const data = parseExtractedJson(text) as Record<string, unknown>
+      data.currency = normalizeCurrency(data.currency)
+      const validation = validateInvoiceArithmetic({
+        pretax: typeof data.pretax === 'number' ? data.pretax : null,
+        vat: typeof data.vat === 'number' ? data.vat : null,
+        total: typeof data.total === 'number' ? data.total : null,
+      })
+      const extraction_raw = {
+        model: INVOICE_EXTRACTION_MODEL,
+        raw_text: text,
+        parsed: data,
+        validation_error: validation.reason,
+        scanned_at: new Date().toISOString(),
+        source: 'manual' as const,
+      }
+      return NextResponse.json({
+        ...data,
+        needs_review: !validation.ok,
+        validation_error: validation.reason,
+        extraction_raw,
+      })
+    } catch (parseErr) {
+      console.error('[extract-invoice] JSON parse failed:', {
+        file_url,
+        stop_reason: stopReason,
+        text_length: text.length,
+        text_preview: text.slice(0, 500),
+        text_tail: text.slice(-200),
+        parse_error: parseErr instanceof Error ? parseErr.message : String(parseErr),
+      })
+      const userMessage =
+        stopReason === 'max_tokens'
+          ? 'התשובה נחתכה — נסה שוב או פצל את הקובץ'
+          : 'עיבוד התשובה נכשל'
+      return NextResponse.json({ error: userMessage }, { status: 500 })
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error('[extract-invoice] error:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    if (/credit balance|quota|rate.?limit/i.test(message)) {
+      return NextResponse.json(
+        { error: 'שירות ה-AI לא זמין כרגע — יתרת קרדיטים נמוכה' },
+        { status: 503 },
+      )
+    }
+    return NextResponse.json({ error: 'חילוץ החשבונית נכשל' }, { status: 500 })
   }
 }
