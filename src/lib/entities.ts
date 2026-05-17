@@ -29,7 +29,7 @@ export interface ExtractionRaw {
   parsed: unknown
   validation_error: string | null
   scanned_at: string
-  source: 'manual' | 'gmail' | 'whatsapp' | 'folder' | 'folder'
+  source: 'manual' | 'gmail' | 'whatsapp' | 'folder'
 }
 
 async function readError(res: Response, fallback: string): Promise<string> {
