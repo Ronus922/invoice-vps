@@ -11,7 +11,13 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    const e = new URLSearchParams(window.location.search).get('error')
+    if (e === 'forbidden') return 'החשבון הזה אינו מורשה לגשת למערכת.'
+    if (e === 'auth') return 'שגיאה בהתחברות. נסה שוב.'
+    return null
+  })
 
   const handleGoogleLogin = async () => {
     setGoogleLoading(true)
