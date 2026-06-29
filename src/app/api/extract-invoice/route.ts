@@ -7,6 +7,7 @@ import {
   INVOICE_EXTRACTION_MAX_TOKENS,
 } from '@/lib/invoice-extraction-prompt'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
+import { resolveFileUrl } from '@/lib/storage'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { normalizeCurrency } from '@/lib/format'
 
@@ -23,7 +24,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'file_url is required' }, { status: 400 })
     }
 
-    const response = await fetch(file_url, { signal: AbortSignal.timeout(20000) })
+    const fetchUrl = await resolveFileUrl(file_url, 60)
+    if (!fetchUrl) {
+      return NextResponse.json({ error: 'הקובץ לא נמצא' }, { status: 404 })
+    }
+    const response = await fetch(fetchUrl, { signal: AbortSignal.timeout(20000) })
     if (!response.ok) {
       return NextResponse.json({ error: 'הורדת הקובץ נכשלה' }, { status: 500 })
     }

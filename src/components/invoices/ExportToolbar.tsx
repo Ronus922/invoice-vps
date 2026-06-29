@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Download, Printer, Loader2, FileSpreadsheet } from 'lucide-react'
 import type { Invoice } from '@/lib/entities'
+import { fileHref } from '@/lib/file-url'
 import { currencySymbol } from '@/lib/format'
 
 interface ExportToolbarProps {
@@ -122,7 +123,7 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
       const fileUrls = filteredInvoices
         .filter((inv) => inv.file_url)
         .map((inv) => ({
-          url: inv.file_url!,
+          url: fileHref(inv.file_url!),
           name: inv.file_name || `${inv.vendor}_${inv.doc_number}.pdf`,
         }))
 
