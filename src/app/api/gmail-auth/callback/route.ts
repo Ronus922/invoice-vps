@@ -66,27 +66,27 @@ export async function GET(request: NextRequest) {
       updated_at: new Date().toISOString(),
     })
 
-  const savedOk = !dbError
+  if (dbError) {
+    // Never render tokens to the client — log server-side, show a generic error.
+    console.error('[gmail-auth/callback] DB save error:', dbError)
+    return new NextResponse(
+      `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>Gmail OAuth</title></head><body style="font-family:system-ui;max-width:600px;margin:50px auto;padding:20px">שגיאה בשמירת ההרשאה. נסה שוב.</body></html>`,
+      { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    )
+  }
 
   const html = `<!DOCTYPE html>
 <html dir="rtl" lang="he">
 <head><meta charset="utf-8"><title>Gmail OAuth</title>
 <style>body{font-family:system-ui;max-width:600px;margin:50px auto;padding:20px;background:#0f172a;color:#e2e8f0}
-code{background:#1e293b;padding:8px 16px;border-radius:8px;display:block;margin:16px 0;word-break:break-all;color:#4ade80;font-size:14px}
-h1{color:#4ade80}.warn{color:#fbbf24}a{color:#60a5fa;text-decoration:none}</style>
+h1{color:#4ade80}a{color:#60a5fa;text-decoration:none}</style>
 <meta http-equiv="refresh" content="5;url=/">
 </head>
 <body>
-${savedOk
-  ? `<h1>Gmail OAuth הצליח!</h1>
+<h1>Gmail OAuth הצליח!</h1>
 <p>הטוקן נשמר אוטומטית במסד הנתונים.</p>
 <p>אין צורך לעשות שום דבר נוסף - הסריקה תעבוד מיד.</p>
-<p>מועבר לדף הראשי בעוד 5 שניות... <a href="/">או לחץ כאן</a></p>`
-  : `<h1 class="warn">OAuth הצליח, אבל השמירה נכשלה</h1>
-<p>הטוקן התקבל אבל לא נשמר ב-DB:</p>
-<code>${dbError?.message || 'Unknown error'}</code>
-<p>Refresh token לשמירה ידנית:</p>
-<code>${tokens.refresh_token || 'לא התקבל'}</code>`}
+<p>מועבר לדף הראשי בעוד 5 שניות... <a href="/">או לחץ כאן</a></p>
 </body></html>`
 
   return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
