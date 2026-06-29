@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { isAllowedEmail } from '@/lib/auth-allowlist'
 
 function getOrigin(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-host')
@@ -24,6 +25,16 @@ export async function GET(request: NextRequest) {
     const supabase = await createClient()
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
+      const { data, error: userErr } = await supabase.auth.getUser()
+      const user = data.user
+      // Couldn't verify identity (transient/network) — retryable, not "forbidden".
+      if (userErr || !user) {
+        return NextResponse.redirect(`${origin}/login?error=auth`)
+      }
+      if (!isAllowedEmail(user.email)) {
+        await supabase.auth.signOut()
+        return NextResponse.redirect(`${origin}/login?error=forbidden`)
+      }
       return NextResponse.redirect(`${origin}${next}`)
     }
   }
