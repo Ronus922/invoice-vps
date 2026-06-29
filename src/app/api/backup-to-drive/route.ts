@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthenticatedUser } from '@/lib/auth-helpers'
 import { getGmailAccessToken } from '@/lib/gmail'
+import { resolveFileUrl } from '@/lib/storage'
 import { ensureFolder, findFileInFolder, uploadFile, moveFile, monthFolderName } from '@/lib/drive'
 
 const supabase = createClient(
@@ -246,7 +247,11 @@ export async function POST(request: NextRequest) {
           continue
         }
 
-        const fileRes = await fetch(row.file_url, { signal: AbortSignal.timeout(60000) })
+        const fetchUrl = await resolveFileUrl(row.file_url, 120)
+        if (!fetchUrl) {
+          throw new Error('no signed url for file')
+        }
+        const fileRes = await fetch(fetchUrl, { signal: AbortSignal.timeout(60000) })
         if (!fileRes.ok) {
           throw new Error(`fetch file_url ${fileRes.status}`)
         }

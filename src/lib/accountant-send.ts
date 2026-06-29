@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { getGmailAccessToken, getAccountantEmail } from '@/lib/gmail'
+import { resolveFileUrl } from '@/lib/storage'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -101,7 +102,13 @@ export async function sendInvoiceToAccountant(input: SendInput): Promise<SendRes
   }
 
   try {
-    const fileRes = await fetch(input.fileUrl)
+    const fetchUrl = await resolveFileUrl(input.fileUrl, 60)
+    if (!fetchUrl) {
+      const error = 'failed_to_fetch_file (no signed url)'
+      await recordOutcome(input, { sent_to_accountant_at: null, accountant_send_error: error })
+      return { sent: false, error }
+    }
+    const fileRes = await fetch(fetchUrl)
     if (!fileRes.ok) {
       const error = `failed_to_fetch_file (HTTP ${fileRes.status})`
       await recordOutcome(input, { sent_to_accountant_at: null, accountant_send_error: error })

@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/select'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { uploadFile } from '@/lib/upload'
+import { fileHref } from '@/lib/file-url'
 import { currencySymbol } from '@/lib/format'
 import { Loader2, Paperclip, ExternalLink, X, Upload, AlertTriangle } from 'lucide-react'
 import {
@@ -257,7 +258,7 @@ export default function EditInvoiceDialog({
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <a
-                    href={form.file_url as string}
+                    href={fileHref(form.file_url as string)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-500 hover:text-blue-700"

@@ -1,6 +1,7 @@
 import { updateSession } from '@/lib/supabase/middleware'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { isAllowedEmail } from '@/lib/auth-allowlist'
 
 export async function middleware(request: NextRequest) {
   // Always refresh the session first
@@ -57,6 +58,21 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
+  // Authenticated but not on the allowlist — lock out regardless of provider
+  if (!isAllowedEmail(user.email)) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'Forbidden', message: 'אין לך הרשאה לגשת למערכת' },
+        { status: 403 }
+      )
+    }
+    const loginUrl = request.nextUrl.clone()
+    loginUrl.pathname = '/login'
+    loginUrl.search = ''
+    loginUrl.searchParams.set('error', 'forbidden')
+    return NextResponse.redirect(loginUrl)
+  }
+
   return response
 }
 
@@ -69,6 +85,6 @@ export const config = {
      * - favicon.ico, icons, manifest
      * - public files (images, sw.js)
      */
-    '/((?!_next/static|_next/image|favicon\\.ico|icon.*|apple-touch-icon|manifest\\.json|sw\\.js).*)',
+    '/((?!_next/static|_next/image|favicon\\.ico|icon-192\\.png|icon-512\\.png|icon\\.svg|apple-touch-icon\\.png|manifest\\.json|sw\\.js).*)',
   ],
 }
