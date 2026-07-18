@@ -101,11 +101,27 @@ Some invoices show several totals (line subtotals, periodic subtotals, grand tot
 ## INVOICE NUMBER
 Look for: מספר חשבונית / חשבונית מס מספר / Invoice # / מס' קבלה / doc number in header
 
+## DOCUMENT TYPE — סוג המסמך (קריטי!)
+Identify the document type from its PRINTED TITLE/HEADER (not from the content).
+The SAME number can appear on both an invoice and a receipt — the type keeps them
+apart. Return one of these exact codes in "doc_type":
+- "invoice"          — חשבונית מס / חשבונית / Tax Invoice / Invoice
+- "receipt"          — קבלה / Receipt
+- "invoice_receipt"  — חשבונית מס קבלה / חשבונית מס-קבלה / Tax Invoice-Receipt (a single
+                       document that is BOTH — very common in Israel)
+- "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note (usually a negative/refund total)
+- "other"            — a clearly different document type (proforma, quote, delivery note)
+- "unknown"          — the printed title is missing or you cannot tell
+Read the title at the TOP of the document. "חשבונית מס/קבלה" or "חשבונית מס קבלה" ⇒
+"invoice_receipt". A plain "חשבונית מס" ⇒ "invoice". A plain "קבלה" ⇒ "receipt".
+When in doubt, return "unknown" — never guess.
+
 Return ONLY this JSON:
 {
   "date": "DD/MM/YYYY (issue date, NOT billing period)",
   "vendor": "exact vendor name as printed (issuer, NOT customer)",
   "doc_number": "invoice/receipt number",
+  "doc_type": "one of: invoice, receipt, invoice_receipt, credit_note, other, unknown",
   "description": "short Hebrew description of what was purchased/charged",
   "currency": "ISO 4217 code: ILS, USD, EUR, GBP, ... — matches the symbol on the invoice",
   "pretax": number (before VAT, in the SAME currency as 'currency'),

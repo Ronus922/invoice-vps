@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { normalizeVendorName } from '@/lib/vendor-utils'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
+import { normalizeDocType } from '@/lib/doc-type'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -37,6 +38,7 @@ const InvoiceWriteSchema = z.object({
   date: z.string().nullable().optional(),
   vendor: z.string().nullable().optional(),
   doc_number: z.string().nullable().optional(),
+  doc_type: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   pretax: numericOrNull.optional(),
   vat: numericOrNull.optional(),
@@ -123,6 +125,9 @@ export async function POST(request: NextRequest) {
   }
   const payload: Record<string, unknown> = { ...parsed.data, created_by: user.id }
 
+  // Always store a canonical doc_type (the DB CHECK rejects anything else).
+  payload.doc_type = normalizeDocType(payload.doc_type)
+
   // DB has NOT NULL on vendor/doc_number; AI sometimes returns null when it
   // can't read those fields. Coerce to '' and force needs_review so the user
   // can fix manually instead of losing the file.
@@ -157,6 +162,17 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (error) {
+    // Write-time dedup: the partial unique index on (vendor, doc_number, doc_type)
+    // rejected a same-identity row. This closes the racy-rescan window (and races
+    // between parallel scans) that a stale in-memory snapshot could not. Report it
+    // as a skipped duplicate, not a failure — no row was created.
+    if (error.code === '23505') {
+      console.warn(
+        '[invoices POST] duplicate skipped (vendor, doc_number, doc_type):',
+        payload.vendor, payload.doc_number, payload.doc_type
+      )
+      return NextResponse.json({ duplicate: true }, { status: 200 })
+    }
     console.error('[invoices POST] supabase error:', error)
     return NextResponse.json(
       { error: `יצירת חשבונית נכשלה — ${error.message}` },
@@ -182,6 +198,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'נתונים לא תקינים' }, { status: 400 })
   }
   const updates: Record<string, unknown> = { ...parsed.data }
+  if ('doc_type' in updates) updates.doc_type = normalizeDocType(updates.doc_type)
 
   const touchedAmounts =
     'pretax' in updates || 'vat' in updates || 'total' in updates

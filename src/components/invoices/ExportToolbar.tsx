@@ -124,7 +124,11 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
         .filter((inv) => inv.file_url)
         .map((inv) => ({
           url: fileHref(inv.file_url!),
-          name: inv.file_name || `${inv.vendor}_${inv.doc_number}.pdf`,
+          // Include doc_type in the fallback so an Invoice and a Receipt sharing a
+          // number don't collide as identical zip entries when file_name is absent.
+          name:
+            inv.file_name ||
+            `${inv.vendor}_${inv.doc_number}${inv.doc_type && inv.doc_type !== 'unknown' ? `_${inv.doc_type}` : ''}.pdf`,
         }))
 
       const JSZip = (await import('jszip')).default

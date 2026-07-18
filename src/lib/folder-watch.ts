@@ -1,6 +1,7 @@
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { uploadFile } from '@/lib/upload'
 import { applyRememberedCategory, rememberVendorCategory } from '@/lib/vendor-category-memory'
+import { normalizeDocType } from '@/lib/doc-type'
 
 const IDB_NAME = 'invoiceflow-folder-watch'
 const IDB_STORE = 'handles'
@@ -152,10 +153,20 @@ export async function runFolderScan(
       }
 
       const extracted = applyRememberedCategory(await res.json())
+      const docType = normalizeDocType(extracted.doc_type)
+      const docNum = String(extracted.doc_number ?? '').trim()
 
-      const isDuplicate = existingInvoices.some(
-        (inv) => inv.doc_number === extracted.doc_number && inv.vendor === extracted.vendor
-      )
+      // Fast client-side pre-check on the full identity key (vendor, doc_number,
+      // doc_type). The DB unique index is the real guarantee — this only avoids a
+      // needless upload+insert round-trip when the snapshot already has the row.
+      const isDuplicate =
+        docNum !== '' &&
+        existingInvoices.some(
+          (inv) =>
+            inv.doc_number === extracted.doc_number &&
+            inv.vendor === extracted.vendor &&
+            (inv.doc_type ?? 'unknown') === docType
+        )
       if (isDuplicate) {
         progress.duplicates += 1
         // Treat duplicate as a successful processing — remove the source file.
@@ -167,33 +178,41 @@ export async function runFolderScan(
         continue
       }
 
-      await InvoiceEntity.create({
+      const created = await InvoiceEntity.create({
         ...extracted,
+        doc_type: docType,
         file_url: fileUrl,
         file_name: name,
         source: 'folder',
       })
-      if (extracted.vendor && extracted.category) {
-        rememberVendorCategory(extracted.vendor, extracted.category)
+
+      if (created && 'duplicate' in created) {
+        // DB-level dedup caught a duplicate the snapshot missed (racy re-scan or
+        // two parallel scans). No row created — count it as a duplicate.
+        progress.duplicates += 1
+      } else {
+        if (extracted.vendor && extracted.category) {
+          rememberVendorCategory(extracted.vendor, extracted.category)
+        }
+
+        const needsReview = Boolean(extracted.needs_review)
+        if (!needsReview) {
+          // Fire-and-forget: send to accountant only when arithmetic checks out.
+          fetch('/api/send-to-accountant', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_url: fileUrl,
+              vendor: extracted.vendor || '',
+              date: extracted.date || '',
+            }),
+          }).catch(() => {})
+        }
+
+        progress.created += 1
       }
 
-      const needsReview = Boolean(extracted.needs_review)
-      if (!needsReview) {
-        // Fire-and-forget: send to accountant only when arithmetic checks out.
-        fetch('/api/send-to-accountant', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            file_url: fileUrl,
-            vendor: extracted.vendor || '',
-            date: extracted.date || '',
-          }),
-        }).catch(() => {})
-      }
-
-      progress.created += 1
-
-      // Only delete after the invoice row is committed.
+      // File processed (created or duplicate) — remove it from the folder.
       try {
         await dirHandle.removeEntry(name)
       } catch (err) {

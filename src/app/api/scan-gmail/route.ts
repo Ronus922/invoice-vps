@@ -8,6 +8,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { sendInvoiceToAccountant } from '@/lib/accountant-send'
 import { normalizeCurrency } from '@/lib/format'
+import { normalizeDocType } from '@/lib/doc-type'
 import {
   INVOICE_EXTRACTION_PROMPT,
   INVOICE_EXTRACTION_MODEL,
@@ -134,6 +135,7 @@ interface ExtractedInvoice {
   date?: string
   vendor?: string
   doc_number?: string
+  doc_type?: string
   description?: string
   currency?: string
   pretax?: number
@@ -279,6 +281,7 @@ async function processAttachment(
     const text = textBlock && 'text' in textBlock ? textBlock.text : ''
     const extracted = parseExtractedJson(text) as ExtractedInvoice
     extracted.currency = normalizeCurrency(extracted.currency)
+    extracted.doc_type = normalizeDocType(extracted.doc_type)
     const vendor = String(extracted.vendor || '').trim()
     if (vendor) {
       const remembered = vendorCategoryMemory.get(normalizeVendorName(vendor))
@@ -294,10 +297,14 @@ async function processAttachment(
     })
 
     if (extracted.doc_number) {
+      // Dedup on the full identity key (vendor, doc_number, doc_type): an Invoice
+      // and a Receipt sharing one number are DIFFERENT documents and must both be
+      // allowed. Re-scans of the same document get the same doc_type ⇒ deduped.
       const duplicateQuery = supabase
         .from('invoices')
         .select('id')
         .eq('doc_number', String(extracted.doc_number))
+        .eq('doc_type', extracted.doc_type)
         .limit(1)
 
       if (vendor) {

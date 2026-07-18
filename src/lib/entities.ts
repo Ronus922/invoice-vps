@@ -1,8 +1,11 @@
+import type { DocType } from '@/lib/doc-type'
+
 export interface Invoice {
   id: string
   date: string | null
   vendor: string
   doc_number: string
+  doc_type: DocType
   description: string | null
   pretax: number | null
   vat: number | null
@@ -47,14 +50,17 @@ export const InvoiceEntity = {
     return (await res.json()) as Invoice[]
   },
 
-  async create(record: Partial<Invoice>) {
+  // On a (vendor, doc_number, doc_type) unique-index conflict the server returns
+  // { duplicate: true } (200) instead of a row — the write-time dedup that closes
+  // the racy-rescan window. Callers must check for it before treating as created.
+  async create(record: Partial<Invoice>): Promise<Invoice | { duplicate: true }> {
     const res = await fetch('/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
     })
     if (!res.ok) throw new Error(await readError(res, 'יצירת חשבונית נכשלה'))
-    return (await res.json()) as Invoice
+    return (await res.json()) as Invoice | { duplicate: true }
   },
 
   async update(id: string, updates: Partial<Invoice>) {

@@ -17,6 +17,7 @@ import {
   applyRememberedCategory,
   rememberVendorCategory,
 } from '@/lib/vendor-category-memory'
+import { normalizeDocType } from '@/lib/doc-type'
 
 interface QueueItem {
   file: File
@@ -88,10 +89,19 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           }
 
           const extracted = applyRememberedCategory(await res.json())
+          const docType = normalizeDocType(extracted.doc_type)
+          const docNum = String(extracted.doc_number ?? '').trim()
 
-          const isDuplicate = existingRef.current.some(
-            (inv) => inv.doc_number === extracted.doc_number && inv.vendor === extracted.vendor
-          )
+          // Fast pre-check on the full identity key (vendor, doc_number, doc_type).
+          // The DB unique index is the real guard; this avoids a needless round-trip.
+          const isDuplicate =
+            docNum !== '' &&
+            existingRef.current.some(
+              (inv) =>
+                inv.doc_number === extracted.doc_number &&
+                inv.vendor === extracted.vendor &&
+                (inv.doc_type ?? 'unknown') === docType
+            )
           if (isDuplicate) {
             setQueue((prev) =>
               prev.map((q) =>
@@ -103,12 +113,26 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             continue
           }
 
-          await InvoiceEntity.create({
+          const created = await InvoiceEntity.create({
             ...extracted,
+            doc_type: docType,
             file_url: fileUrl,
             file_name: item.file.name,
             source: 'manual',
           })
+
+          if (created && 'duplicate' in created) {
+            // DB-level dedup caught a duplicate the snapshot missed.
+            setQueue((prev) =>
+              prev.map((q) =>
+                q === item || (q.name === item.name && q.status === 'processing')
+                  ? { ...q, status: 'duplicate', message: 'כבר קיימת במערכת' }
+                  : q
+              )
+            )
+            continue
+          }
+
           if (extracted.vendor && extracted.category) {
             rememberVendorCategory(extracted.vendor, extracted.category)
           }

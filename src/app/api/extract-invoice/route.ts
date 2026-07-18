@@ -10,6 +10,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { resolveFileUrl } from '@/lib/storage'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { normalizeCurrency } from '@/lib/format'
+import { normalizeDocType } from '@/lib/doc-type'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -25,6 +26,10 @@ const EXTRACTION_TOOL: Anthropic.Tool = {
       date: { type: 'string' },
       vendor: { type: 'string' },
       doc_number: { type: 'string' },
+      doc_type: {
+        type: 'string',
+        enum: ['invoice', 'receipt', 'invoice_receipt', 'credit_note', 'other', 'unknown'],
+      },
       description: { type: 'string' },
       currency: { type: 'string' },
       pretax: { type: ['number', 'null'] },
@@ -103,6 +108,7 @@ export async function POST(request: NextRequest) {
         toolBlock && 'input' in toolBlock ? toolBlock.input : parseExtractedJson(text)
       ) as Record<string, unknown>
       data.currency = normalizeCurrency(data.currency)
+      data.doc_type = normalizeDocType(data.doc_type)
       const validation = validateInvoiceArithmetic({
         pretax: typeof data.pretax === 'number' ? data.pretax : null,
         vat: typeof data.vat === 'number' ? data.vat : null,

@@ -19,6 +19,7 @@ interface InvoiceRow {
   id: string
   vendor: string | null
   doc_number: string | null
+  doc_type: string | null
   file_url: string | null
   file_name: string | null
   created_at: string
@@ -44,7 +45,10 @@ function buildFilename(row: InvoiceRow): string {
   if (row.file_name && row.file_name.trim()) return row.file_name
   const vendor = (row.vendor || 'unknown').replace(/[\\/:"*?<>|]/g, '_')
   const doc = (row.doc_number || row.id).toString().replace(/[\\/:"*?<>|]/g, '_')
-  return `${vendor}_${doc}.pdf`
+  // Include doc_type so an Invoice and a Receipt sharing one number don't
+  // overwrite each other in Drive when neither has a stored file_name.
+  const type = row.doc_type && row.doc_type !== 'unknown' ? `_${row.doc_type}` : ''
+  return `${vendor}_${doc}${type}.pdf`
 }
 
 function mimeFromFilename(name: string): string {
@@ -170,7 +174,7 @@ export async function POST(request: NextRequest) {
     // Pass 1 — reorganize already-backed-up files into their created_at folder
     const { data: backedRows, error: backedError } = await supabase
       .from('invoices')
-      .select('id,vendor,doc_number,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
+      .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
       .not('drive_file_id', 'is', null)
       .order('created_at', { ascending: true })
 
@@ -205,7 +209,7 @@ export async function POST(request: NextRequest) {
     // Pass 2 — upload pending invoices (backed_up_to_drive_at IS NULL)
     const query = supabase
       .from('invoices')
-      .select('id,vendor,doc_number,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
+      .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
       .not('file_url', 'is', null)
       .order('created_at', { ascending: true })
 
