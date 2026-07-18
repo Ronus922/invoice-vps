@@ -13,6 +13,7 @@ const supabase = createClient(
 const ROOT_FOLDER_NAME = 'חשבוניות InvoiceFlow'
 
 let activeRun: Promise<unknown> | null = null
+let currentProgress: ProgressSnapshot | null = null
 
 interface InvoiceRow {
   id: string
@@ -118,6 +119,7 @@ export async function GET(request: NextRequest) {
     totalBackedUp: totalBackedUp ?? 0,
     pendingCount: pendingCount ?? 0,
     driveRootFolderId: state?.drive_root_folder_id ?? null,
+    progress: activeRun && currentProgress ? currentProgress : null,
   })
 }
 
@@ -303,7 +305,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  activeRun = runBackup()
+  activeRun = runBackup((snap) => {
+    currentProgress = { ...snap }
+  })
     .catch(async (err) => {
       const message = err instanceof Error ? err.message : 'Unknown error'
       console.error('[backup-to-drive] error:', err)
@@ -314,6 +318,7 @@ export async function POST(request: NextRequest) {
     })
     .finally(() => {
       activeRun = null
+      currentProgress = null
     })
 
   return NextResponse.json({ status: 'started' }, { status: 202 })

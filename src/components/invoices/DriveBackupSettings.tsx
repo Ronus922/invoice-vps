@@ -12,6 +12,14 @@ interface BackupStatus {
   totalBackedUp: number
   pendingCount: number
   driveRootFolderId: string | null
+  progress: {
+    phase: string
+    total: number
+    processed: number
+    uploaded: number
+    skipped: number
+    errors: number
+  } | null
 }
 
 function formatDate(iso: string | null): string {
@@ -95,8 +103,15 @@ export default function DriveBackupSettings() {
   const totalBackedUp = status?.totalBackedUp ?? 0
   const pendingCount = status?.pendingCount ?? 0
   const total = totalBackedUp + pendingCount
-  const ratio = total > 0 ? Math.round((totalBackedUp / total) * 100) : 0
   const running = status?.running === true
+  const runProgress = running ? (status?.progress ?? null) : null
+  const ratio = runProgress
+    ? runProgress.total > 0
+      ? Math.round((runProgress.processed / runProgress.total) * 100)
+      : 0
+    : total > 0
+      ? Math.round((totalBackedUp / total) * 100)
+      : 0
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4" dir="rtl">
@@ -146,7 +161,9 @@ export default function DriveBackupSettings() {
         />
       </div>
       <p className="text-[11px] text-white/50 text-center mb-3">
-        {running ? `מגבה ברקע... ${ratio}%` : `${ratio}%`}
+        {running && runProgress
+          ? `מגבה ברקע... ${runProgress.processed}/${runProgress.total}`
+          : `${ratio}%`}
       </p>
 
       {status?.lastError && !running && (
