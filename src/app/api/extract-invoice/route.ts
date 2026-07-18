@@ -13,6 +13,30 @@ import { normalizeCurrency } from '@/lib/format'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+// ponytail: force structured output via tool_use so the SDK returns parsed
+// JSON — Hebrew values like `בע"מ` carry literal quotes that break JSON.parse
+// on the raw text. Field docs stay in INVOICE_EXTRACTION_PROMPT.
+const EXTRACTION_TOOL: Anthropic.Tool = {
+  name: 'return_invoice',
+  description: 'Return the extracted invoice fields.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      date: { type: 'string' },
+      vendor: { type: 'string' },
+      doc_number: { type: 'string' },
+      description: { type: 'string' },
+      currency: { type: 'string' },
+      pretax: { type: ['number', 'null'] },
+      vat: { type: ['number', 'null'] },
+      total: { type: ['number', 'null'] },
+      payment_method: { type: 'string' },
+      category: { type: 'string' },
+    },
+    required: ['date', 'vendor', 'total', 'currency'],
+  },
+}
+
 export async function POST(request: NextRequest) {
   const user = await getAuthenticatedUser()
   if (!user) return unauthorizedResponse()
@@ -57,6 +81,8 @@ export async function POST(request: NextRequest) {
     const result = await anthropic.messages.create({
       model: INVOICE_EXTRACTION_MODEL,
       max_tokens: INVOICE_EXTRACTION_MAX_TOKENS,
+      tools: [EXTRACTION_TOOL],
+      tool_choice: { type: 'tool', name: EXTRACTION_TOOL.name },
       messages: [
         {
           role: 'user',
@@ -65,12 +91,17 @@ export async function POST(request: NextRequest) {
       ],
     })
 
+    const toolBlock = result.content.find((b) => b.type === 'tool_use')
     const textBlock = result.content.find((b) => b.type === 'text')
     const text = textBlock && 'text' in textBlock ? textBlock.text : ''
     const stopReason = result.stop_reason
 
     try {
-      const data = parseExtractedJson(text) as Record<string, unknown>
+      // tool_use.input is already-parsed JSON; fall back to text parse only if
+      // the model somehow returned no tool call.
+      const data = (
+        toolBlock && 'input' in toolBlock ? toolBlock.input : parseExtractedJson(text)
+      ) as Record<string, unknown>
       data.currency = normalizeCurrency(data.currency)
       const validation = validateInvoiceArithmetic({
         pretax: typeof data.pretax === 'number' ? data.pretax : null,
@@ -79,7 +110,7 @@ export async function POST(request: NextRequest) {
       })
       const extraction_raw = {
         model: INVOICE_EXTRACTION_MODEL,
-        raw_text: text,
+        raw_text: text || JSON.stringify(data),
         parsed: data,
         validation_error: validation.reason,
         scanned_at: new Date().toISOString(),
