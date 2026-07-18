@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "next dev",
-    "build": "next build && bash scripts/prepare-standalone.sh",
+    "build": "pnpm lint && next build && bash scripts/prepare-standalone.sh",
     "start": "node .next/standalone/server.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
