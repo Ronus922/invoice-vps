@@ -12,6 +12,7 @@
 |---|---|---|
 | `check:secrets` | `check-no-secrets.mjs` | דליפת מפתחות ל-git — אף ערך מ-`.env.local` (service-role, Anthropic, Gmail, CRON, DB) לא מופיע בקובץ במעקב, ואין `.env` במעקב (מלבד `*.example`). |
 | `check:auth` | `check-api-auth.mjs` | route חשוף — כל handler תחת `src/app/api/**` חייב `getAuthenticatedUser()` או `CRON_SECRET`. (יוצא דופן מותר: `auth/logout`.) קריטי כי ה-routes משתמשים ב-service-role שעוקף RLS. |
+| `check:source` | `check-source-enum.mjs` | drift בין הקוד למסד — ערכי `source` ב-`z.enum` של route החשבוניות חייבים להיות זהים ל-`CHECK` במסד (migration). ערך שהקוד שולח והמסד לא מכיר → כל insert כזה נדחה בשקט. בדיקה סטטית (קבצים בלבד, ללא DB). |
 | `check:anon` | `check-anon-isolation.mjs` | חשיפת נתונים ל-anon — קורא בפועל עם ה-anon key מ-`invoices`, `gmail_tokens`, `scanned_emails` ומוודא **0 שורות**. מגן מדליפת חשבוניות (כסף) ו-refresh token של Gmail. |
 | `check:money` | `check-money-balanced.mjs` | **שגיאה כספית שקטה** — אין חשבונית לא-מאוזנת (`total≤0`, או `pretax+vat≠total` מעבר לסובלנות `max(0.05, total·0.5%)`) שאינה מסומנת `needs_review`. חוזה המערכת: לא-מאוזן ⟹ needs_review. חשבונית לא-מאוזנת **מסומנת** = תקין. |
 | `check:currency` | `check-currency-valid.mjs` | חשבונית זרה שנשמרה כ-₪ — לכל רשומה קוד מטבע ISO-4217 תקין (`^[A-Z]{3}$`). |
@@ -20,7 +21,7 @@
 
 ### הרצה בודדת
 ```bash
-npm run check:money      # או check:secrets / check:auth / check:anon / check:currency / check:review / check:dupes
+npm run check:money      # או check:secrets / check:auth / check:source / check:anon / check:currency / check:review / check:dupes
 npm run check:all        # typecheck + lint + כל הבדיקות, עוצר על הכישלון הראשון
 ```
 
