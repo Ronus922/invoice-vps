@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build && bash scripts/prepare-standalone.sh",
     "start": "node .next/standalone/server.js",
-    "lint": "next lint"
+    "lint": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
