@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type ReactNode } from 'react'
 import {
   Table,
   TableBody,
@@ -64,18 +64,24 @@ function SortIcon({ field, sortConfig }: { field: SortField; sortConfig: { field
   )
 }
 
+const PAGE_SIZE = 25
+
 interface InvoicesTableProps {
   invoices: Invoice[]
+  totalCount?: number
   onRefresh: () => void
   isLoading: boolean
   categories?: string[]
+  toolbar?: ReactNode
 }
 
 export default function InvoicesTable({
   invoices = [],
+  totalCount,
   onRefresh,
   isLoading,
   categories = [],
+  toolbar,
 }: InvoicesTableProps) {
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null)
   const [editInvoice, setEditInvoice] = useState<Invoice | null>(null)
@@ -87,6 +93,7 @@ export default function InvoicesTable({
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState(1)
 
   const retrySend = async (inv: Invoice) => {
     if (retryingIds.has(inv.id) || !inv.file_url) return
@@ -164,10 +171,27 @@ export default function InvoicesTable({
     })
   }, [invoices, sortConfig])
 
-  const allSelected = sortedInvoices.length > 0 && selected.size === sortedInvoices.length
+  // Client-side pagination over the sorted list. Page is clamped so filter
+  // changes that shrink the list never leave us on a non-existent page.
+  const totalPages = Math.max(1, Math.ceil(sortedInvoices.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pageInvoices = useMemo(
+    () => sortedInvoices.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [sortedInvoices, currentPage]
+  )
+
+  const pageNumbers = useMemo(() => {
+    const windowSize = 5
+    let start = Math.max(1, currentPage - 2)
+    const end = Math.min(totalPages, start + windowSize - 1)
+    start = Math.max(1, end - windowSize + 1)
+    return Array.from({ length: end - start + 1 }, (_, i) => start + i)
+  }, [currentPage, totalPages])
+
+  const allSelected = pageInvoices.length > 0 && pageInvoices.every((inv) => selected.has(inv.id))
   const toggleAll = () => {
     if (allSelected) setSelected(new Set())
-    else setSelected(new Set(sortedInvoices.map((inv) => inv.id)))
+    else setSelected(new Set(pageInvoices.map((inv) => inv.id)))
   }
 
   const handleDelete = async () => {
@@ -178,51 +202,61 @@ export default function InvoicesTable({
   }
 
   const thClass =
-    'text-right !text-base !font-black text-white cursor-pointer select-none hover:text-blue-300 transition-colors'
+    'text-right cursor-pointer select-none transition-colors hover:!text-[var(--text2)]'
 
   return (
-    <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl shadow-xl overflow-hidden" dir="rtl">
-      {/* Header */}
-      <div
-        className="flex items-center gap-3 p-5 pb-4 border-b border-white/10 bg-white/5"
-        style={{ justifyContent: 'flex-end', direction: 'ltr' }}
-      >
-        {selected.size > 0 && (
-          <button
-            onClick={() => setConfirmBulkDelete(true)}
-            className="flex items-center gap-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400 hover:text-red-300 text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            מחק {selected.size} נבחרים
-          </button>
-        )}
-        <h2 className="text-lg font-bold text-white" style={{ direction: 'rtl' }}>
-          טבלת חשבוניות
-        </h2>
-        <div className="bg-gradient-to-br from-indigo-500 to-blue-600 p-2 rounded-xl">
-          <FileText className="w-4 h-4 text-white" />
+    <div
+      className="overflow-hidden rounded-[18px]"
+      style={{ background: 'var(--panel)', border: '1px solid var(--border)' }}
+      dir="rtl"
+    >
+      {/* Toolbar: filters + export actions (+ bulk delete when relevant) */}
+      {(toolbar || selected.size > 0) && (
+        <div
+          className="flex flex-wrap items-center gap-3 px-5 py-4"
+          style={{ borderBottom: '1px solid var(--border)' }}
+        >
+          {toolbar}
+          {selected.size > 0 && (
+            <button
+              onClick={() => setConfirmBulkDelete(true)}
+              className="flex h-10 items-center gap-1.5 rounded-[10px] px-3.5 text-[13.5px] font-medium transition-colors"
+              style={{
+                background: 'rgba(248, 113, 113, 0.12)',
+                border: '1px solid rgba(248, 113, 113, 0.35)',
+                color: 'rgb(252, 165, 165)',
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              מחק {selected.size} נבחרים
+            </button>
+          )}
         </div>
-      </div>
+      )}
 
       {isLoading ? (
-        <div className="flex flex-col items-center justify-center py-16 text-white/40">
+        <div className="flex flex-col items-center justify-center py-16" style={{ color: 'var(--muted)' }}>
           <Loader2 className="w-10 h-10 mb-3 animate-spin" />
           <p className="text-sm">טוען...</p>
         </div>
       ) : invoices.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-white/40">
-          <FileText className="w-12 h-12 mb-3 opacity-30" />
+        <div className="flex flex-col items-center justify-center py-16" style={{ color: 'var(--muted)' }}>
+          <FileText className="w-12 h-12 mb-3 opacity-50" />
           <p className="text-sm">אין חשבוניות עדיין</p>
           <p className="text-xs mt-1">העלה קובץ PDF כדי להתחיל</p>
         </div>
       ) : (
         <>
           {/* Mobile: Cards */}
-          <div className="sm:hidden divide-y divide-white/10" dir="rtl">
-            {sortedInvoices.map((inv) => (
+          <div className="sm:hidden" dir="rtl">
+            {pageInvoices.map((inv) => (
               <div
                 key={inv.id}
-                className={`p-4 transition-colors ${selected.has(inv.id) ? 'bg-blue-500/10' : 'hover:bg-white/5'}`}
+                className="p-4 transition-colors"
+                style={{
+                  borderBottom: '1px solid var(--border-soft)',
+                  background: selected.has(inv.id) ? 'var(--accent-soft)' : undefined,
+                }}
                 onClick={() => setEditInvoice(inv)}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -234,7 +268,7 @@ export default function InvoicesTable({
                       type="checkbox"
                       checked={selected.has(inv.id)}
                       onChange={() => toggleSelect(inv.id)}
-                      className="w-4 h-4 accent-blue-400 cursor-pointer"
+                      className="w-4 h-4 accent-[#2dd4bf] cursor-pointer"
                     />
                   </label>
                   <div className="flex-1 min-w-0">
@@ -332,7 +366,8 @@ export default function InvoicesTable({
             <Table>
               <TableHeader>
                 <TableRow
-                  className="bg-white/5 border-white/10 [&>th]:!text-base [&>th]:!font-black [&>th]:!py-5"
+                  className="[&>th]:!py-3 [&>th]:text-[12.5px] [&>th]:!font-semibold [&>th]:text-[var(--muted-mid)]"
+                  style={{ background: 'var(--hover)', borderBottom: '1px solid var(--border)' }}
                   dir="rtl"
                 >
                   <TableHead className="w-10 text-center">
@@ -340,41 +375,37 @@ export default function InvoicesTable({
                       type="checkbox"
                       checked={allSelected}
                       onChange={toggleAll}
-                      className="w-4 h-4 accent-blue-400 cursor-pointer"
+                      className="w-4 h-4 accent-[#2dd4bf] cursor-pointer"
                     />
                   </TableHead>
-                  <TableHead className={`${thClass} py-4`} onClick={() => toggleSort('date')}>
+                  <TableHead className={thClass} onClick={() => toggleSort('date')}>
                     תאריך <SortIcon field="date" sortConfig={sortConfig} />
                   </TableHead>
-                  <TableHead className={`${thClass} py-4`} onClick={() => toggleSort('vendor')}>
+                  <TableHead className={thClass} onClick={() => toggleSort('vendor')}>
                     ספק <SortIcon field="vendor" sortConfig={sortConfig} />
                   </TableHead>
-                  <TableHead className="text-right !text-base !font-black text-white py-4">
-                    מס&apos; חשבונית
-                  </TableHead>
-                  <TableHead className="text-right !text-base !font-black text-white py-4">
-                    תיאור
-                  </TableHead>
-                  <TableHead className={`${thClass} py-4`} onClick={() => toggleSort('total')}>
+                  <TableHead className="text-right">מס&apos; חשבונית</TableHead>
+                  <TableHead className="text-right">תיאור</TableHead>
+                  <TableHead className={thClass} onClick={() => toggleSort('total')}>
                     סה&quot;כ <SortIcon field="total" sortConfig={sortConfig} />
                   </TableHead>
-                  <TableHead className="text-right !text-base !font-black text-white py-4">
-                    תשלום
-                  </TableHead>
-                  <TableHead className={`${thClass} py-4`} onClick={() => toggleSort('source')}>
+                  <TableHead className="text-right">תשלום</TableHead>
+                  <TableHead className={thClass} onClick={() => toggleSort('source')}>
                     מקור <SortIcon field="source" sortConfig={sortConfig} />
                   </TableHead>
-                  <TableHead className="text-center !text-base !font-black text-white py-4 w-20">
-                    רו&quot;ח
-                  </TableHead>
+                  <TableHead className="w-20 text-center">רו&quot;ח</TableHead>
                   <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedInvoices.map((inv) => (
+                {pageInvoices.map((inv) => (
                   <TableRow
                     key={inv.id}
-                    className={`hover:bg-white/10 transition-colors group border-white/5 cursor-pointer ${selected.has(inv.id) ? 'bg-blue-500/10' : ''}`}
+                    className="group cursor-pointer transition-colors hover:bg-[var(--hover)]"
+                    style={{
+                      borderBottom: '1px solid var(--border-soft)',
+                      background: selected.has(inv.id) ? 'var(--accent-soft)' : undefined,
+                    }}
                     onDoubleClick={() => setEditInvoice(inv)}
                   >
                     <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
@@ -382,23 +413,31 @@ export default function InvoicesTable({
                         type="checkbox"
                         checked={selected.has(inv.id)}
                         onChange={() => toggleSelect(inv.id)}
-                        className="w-4 h-4 accent-blue-400 cursor-pointer"
+                        className="w-4 h-4 accent-[#2dd4bf] cursor-pointer"
                       />
                     </TableCell>
-                    <TableCell className="text-right text-sm text-white/50 whitespace-nowrap">
+                    <TableCell
+                      className="whitespace-nowrap text-right text-[13.5px]"
+                      style={{ color: 'var(--text3)' }}
+                      dir="ltr"
+                    >
                       {inv.date || '—'}
                     </TableCell>
-                    <TableCell className="text-right text-sm font-semibold text-white">
+                    <TableCell className="text-right text-[13.5px] font-semibold" style={{ color: 'var(--text)' }}>
                       {inv.vendor || '—'}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-blue-300 font-mono">
+                    <TableCell className="text-right text-[12.5px]" style={{ color: 'var(--link)' }} dir="ltr">
                       {inv.doc_number || '—'}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-white/60 max-w-[200px] truncate">
+                    <TableCell
+                      className="max-w-[200px] truncate text-right text-[13.5px]"
+                      style={{ color: 'var(--text2)' }}
+                    >
                       {inv.description || '—'}
                     </TableCell>
                     <TableCell
-                      className={`text-right text-sm font-bold ${inv.needs_review ? 'text-red-400' : 'text-emerald-400'}`}
+                      className="text-right text-[13.5px] font-bold"
+                      style={{ color: inv.needs_review ? 'rgb(248, 113, 113)' : 'var(--accent)' }}
                       title={inv.needs_review ? inv.validation_error || 'נדרשת בדיקת סכומים' : undefined}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -408,20 +447,29 @@ export default function InvoicesTable({
                         {formatCurrency(inv.total, inv.currency)}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right text-sm text-white/60">
+                    <TableCell className="text-right text-[12.5px]" style={{ color: 'var(--text3)' }}>
                       {inv.payment_method || '—'}
                     </TableCell>
                     <TableCell className="text-right">
                       {inv.source === 'gmail' ? (
-                        <span className="inline-flex items-center gap-1 text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full">
+                        <span
+                          className="inline-flex items-center rounded-full px-2.5 py-[3px] text-[11.5px]"
+                          style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+                        >
                           מייל
                         </span>
                       ) : inv.source === 'whatsapp' ? (
-                        <span className="inline-flex items-center gap-1 text-xs bg-green-500/20 text-green-300 border border-green-500/30 px-2 py-0.5 rounded-full">
+                        <span
+                          className="inline-flex items-center rounded-full px-2.5 py-[3px] text-[11.5px]"
+                          style={{ background: 'rgba(74, 222, 128, 0.12)', color: 'rgb(134, 239, 172)' }}
+                        >
                           וואטסאפ
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-xs bg-white/10 text-white/40 border border-white/10 px-2 py-0.5 rounded-full">
+                        <span
+                          className="inline-flex items-center rounded-full px-2.5 py-[3px] text-[11.5px]"
+                          style={{ background: 'var(--chip-bg)', color: '#a9bde0' }}
+                        >
                           ידני
                         </span>
                       )}
@@ -433,7 +481,7 @@ export default function InvoicesTable({
                         if (status.sent) {
                           return (
                             <span title={status.tooltip} aria-label={status.tooltip}>
-                              <CheckCircle2 className="w-5 h-5 text-emerald-400 inline" />
+                              <CheckCircle2 className="inline h-5 w-5" style={{ color: 'var(--accent)' }} />
                             </span>
                           )
                         }
@@ -472,6 +520,52 @@ export default function InvoicesTable({
                 ))}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Pagination footer */}
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 text-[13px]"
+            style={{ color: 'var(--muted-mid)' }}
+          >
+            <span>
+              מציג {pageInvoices.length} מתוך {totalCount ?? sortedInvoices.length} חשבוניות
+            </span>
+            {totalPages > 1 && (
+              <div className="flex gap-1.5" dir="ltr">
+                <button
+                  onClick={() => setPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
+                  aria-label="עמוד קודם"
+                  className="h-8 w-8 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ border: '1px solid var(--border)', color: 'var(--text3)' }}
+                >
+                  ‹
+                </button>
+                {pageNumbers.map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className="h-8 w-8 rounded-lg transition-colors"
+                    style={
+                      n === currentPage
+                        ? { background: 'var(--accent)', color: 'var(--on-accent)', fontWeight: 700 }
+                        : { border: '1px solid var(--border)', color: 'var(--text3)' }
+                    }
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
+                  aria-label="עמוד הבא"
+                  className="h-8 w-8 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ border: '1px solid var(--border)', color: 'var(--text3)' }}
+                >
+                  ›
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}

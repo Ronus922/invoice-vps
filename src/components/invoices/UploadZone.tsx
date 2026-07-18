@@ -2,7 +2,6 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import {
-  FileText,
   Loader2,
   AlertCircle,
   Upload,
@@ -219,8 +218,9 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
   }
 
   return (
-    <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-2xl p-6 shadow-xl" dir="rtl">
+    <div dir="rtl">
       <input
+        id="invoice-upload-input"
         ref={fileInputRef}
         type="file"
         accept=".pdf,image/*"
@@ -237,18 +237,6 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
         onChange={handleFileSelect}
       />
 
-      <div
-        className="flex items-center gap-2 mb-5"
-        style={{ justifyContent: 'flex-end', direction: 'ltr' }}
-      >
-        <h2 className="text-lg font-bold text-white" style={{ direction: 'rtl' }}>
-          העלאת חשבוניות
-        </h2>
-        <div className="bg-gradient-to-br from-pink-500 to-rose-500 p-2 rounded-xl">
-          <Upload className="w-4 h-4 text-white" />
-        </div>
-      </div>
-
       {/* Drop Zone */}
       <div
         onDragOver={(e) => {
@@ -261,32 +249,33 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           if (isMobile) setShowMobileMenu(true)
           else fileInputRef.current?.click()
         }}
-        className={`
-          relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-300 overflow-hidden
-          ${isDragging ? 'border-blue-400 bg-blue-500/20 scale-[1.01]' : 'border-white/20 hover:border-white/40 bg-white/5 hover:bg-white/10'}
-        `}
+        className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl p-5 transition-colors sm:flex-row sm:gap-4 sm:p-[26px]"
+        style={{
+          border: `1.5px dashed ${isDragging ? 'var(--accent)' : 'rgba(126, 152, 210, 0.35)'}`,
+          background: isDragging ? 'var(--accent-soft)' : 'rgba(126, 152, 210, 0.05)',
+        }}
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 pointer-events-none" />
-        <div className="flex flex-col items-center gap-3 relative z-10">
-          <div
-            className={`p-3 rounded-2xl border ${isRunning ? 'bg-blue-500/20 border-blue-400/30' : 'bg-white/10 border-white/20'}`}
-          >
-            {isRunning ? (
-              <Loader2 className="w-7 h-7 text-blue-300 animate-spin" />
-            ) : (
-              <FileText className="w-7 h-7 text-white/70" />
-            )}
-          </div>
-          <div className="text-right w-full">
-            <p className="text-base font-semibold text-white mb-1">
-              {isRunning
-                ? 'מעבד חשבוניות...'
-                : isMobile
-                  ? 'לחץ לצילום או בחירת קובץ'
-                  : 'גרור קבצי PDF לכאן או לחץ לבחירה'}
-            </p>
-            <p className="text-sm text-white/40">ניתן לבחור מספר קבצים בו-זמנית - מעובד ע&quot;י AI</p>
-          </div>
+        <div
+          className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px]"
+          style={{ background: 'var(--accent-soft)' }}
+        >
+          {isRunning ? (
+            <Loader2 className="h-[22px] w-[22px] animate-spin" style={{ color: 'var(--accent)' }} />
+          ) : (
+            <Upload className="h-[22px] w-[22px]" style={{ color: 'var(--accent)' }} />
+          )}
+        </div>
+        <div className="flex flex-col gap-0.5 text-center sm:text-right">
+          <span className="text-[15.5px] font-semibold">
+            {isRunning
+              ? 'מעבד חשבוניות...'
+              : isMobile
+                ? 'לחץ לצילום או בחירת קובץ'
+                : 'גרור קבצי PDF לכאן או לחץ לבחירה'}
+          </span>
+          <span className="text-[13px]" style={{ color: 'var(--muted-mid)' }}>
+            ניתן לבחור מספר קבצים בו־זמנית — הנתונים מחולצים ע&quot;י AI
+          </span>
         </div>
       </div>
 
@@ -351,41 +340,49 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
         >
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
-            className="relative w-full bg-gradient-to-b from-slate-800 to-slate-900 border-t border-white/10 rounded-t-3xl p-6 pb-10 shadow-2xl"
+            className="relative w-full rounded-t-3xl p-6 pb-10 shadow-2xl"
+            style={{ background: 'var(--panel)', borderTop: '1px solid var(--border)' }}
             onClick={(e) => e.stopPropagation()}
             dir="rtl"
           >
-            <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-6" />
-            <h3 className="text-center text-white font-bold text-xl mb-8">בחר מקור</h3>
-            <div className="flex justify-center gap-6 mb-6">
+            <div className="mx-auto mb-6 h-1 w-10 rounded-full" style={{ background: 'var(--border)' }} />
+            <h3 className="mb-8 text-center text-xl font-bold">בחר מקור</h3>
+            <div className="mb-6 flex justify-center gap-6">
               <button
-                className="flex flex-col items-center gap-3 flex-1 max-w-[130px]"
+                className="flex max-w-[130px] flex-1 flex-col items-center gap-3"
                 onClick={() => {
                   setShowMobileMenu(false)
                   fileInputRef.current?.click()
                 }}
               >
-                <div className="w-20 h-20 bg-gradient-to-br from-blue-500/30 to-blue-600/20 border border-blue-400/40 rounded-3xl flex items-center justify-center">
-                  <FolderOpen className="w-9 h-9 text-blue-300" />
+                <div
+                  className="flex h-20 w-20 items-center justify-center rounded-3xl"
+                  style={{ background: 'var(--accent-soft)', border: '1px solid rgba(45, 212, 191, 0.4)' }}
+                >
+                  <FolderOpen className="h-9 w-9" style={{ color: 'var(--accent)' }} />
                 </div>
-                <span className="text-sm text-white/80 font-medium">גלריה וקבצים</span>
+                <span className="text-sm font-medium" style={{ color: 'var(--text2)' }}>גלריה וקבצים</span>
               </button>
               <button
-                className="flex flex-col items-center gap-3 flex-1 max-w-[130px]"
+                className="flex max-w-[130px] flex-1 flex-col items-center gap-3"
                 onClick={() => {
                   setShowMobileMenu(false)
                   cameraInputRef.current?.click()
                 }}
               >
-                <div className="w-20 h-20 bg-gradient-to-br from-purple-500/30 to-pink-600/20 border border-purple-400/40 rounded-3xl flex items-center justify-center">
-                  <Camera className="w-9 h-9 text-purple-300" />
+                <div
+                  className="flex h-20 w-20 items-center justify-center rounded-3xl"
+                  style={{ background: 'var(--chip-bg)', border: '1px solid var(--border)' }}
+                >
+                  <Camera className="h-9 w-9" style={{ color: 'var(--text3)' }} />
                 </div>
-                <span className="text-sm text-white/80 font-medium">צלם חשבונית</span>
+                <span className="text-sm font-medium" style={{ color: 'var(--text2)' }}>צלם חשבונית</span>
               </button>
             </div>
             <button
               onClick={() => setShowMobileMenu(false)}
-              className="w-full py-3 rounded-2xl bg-white/5 border border-white/10 text-white/50 text-sm font-medium"
+              className="w-full rounded-2xl py-3 text-sm font-medium"
+              style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--muted-mid)' }}
             >
               ביטול
             </button>

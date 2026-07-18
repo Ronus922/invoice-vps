@@ -52,7 +52,7 @@
   --color-foreground: #ffffff;
   --color-card: rgba(255, 255, 255, 0.1);
   --color-card-foreground: #ffffff;
-  --color-popover: #1e293b;
+  --color-popover: #0e1f3d;
   --color-popover-foreground: #ffffff;
   --color-muted: rgba(255, 255, 255, 0.1);
   --color-muted-foreground: rgba(255, 255, 255, 0.5);
@@ -63,6 +63,29 @@
   --color-border: rgba(255, 255, 255, 0.15);
   --color-input: rgba(255, 255, 255, 0.1);
   --color-ring: #3b82f6;
+}
+
+/* InvoiceFlow redesign tokens — extracted verbatim from the approved mockup
+   (InvoiceFlow App.html). Components reference these via var(--...). */
+:root {
+  --bg: #0b1830;
+  --bg-grad: radial-gradient(1000px 500px at 80% -10%, #14294e 0%, #0b1830 60%);
+  --panel: #0e1f3d;
+  --border: rgba(126, 152, 210, 0.18);
+  --border-soft: rgba(126, 152, 210, 0.08);
+  --text: #f4f7fd;
+  --text2: #c9d8f2;
+  --text3: #8fb0e8;
+  --muted: #5d729c;
+  --muted-mid: #7e97c4;
+  --chip-bg: rgba(126, 152, 210, 0.12);
+  --input-bg: rgba(126, 152, 210, 0.08);
+  --hover: rgba(126, 152, 210, 0.08);
+  --accent: #2dd4bf;
+  --on-accent: #0b1830;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --stat-card: linear-gradient(175deg, rgba(37, 58, 99, 0.5) 0%, rgba(24, 40, 74, 0.5) 100%);
+  --link: #7fb0e0;
 }
 
 * {
@@ -79,8 +102,8 @@ html {
 }
 
 body {
-  background: linear-gradient(to bottom right, #0f172a, #172554, #1e1b4b);
-  color: white;
+  background: var(--bg);
+  color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
@@ -88,9 +111,10 @@ body {
   max-width: 100vw;
 }
 
-/* Display/Headline font */
+/* Display/Headline font — Heebo everywhere: the app is Hebrew and Manrope has
+   no Hebrew glyphs (it silently fell back to a wider default before). */
 h1, h2, h3, .font-display {
-  font-family: var(--font-display);
+  font-family: 'Heebo', sans-serif;
 }
 
 /* Scrollbar styling */

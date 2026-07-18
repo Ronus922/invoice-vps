@@ -2,7 +2,18 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Tag, LogOut, Mail, FolderCog, HardDrive } from 'lucide-react'
+import {
+  LayoutGrid,
+  FileText,
+  Mail,
+  FolderCog,
+  Tag,
+  Cloud,
+  Settings,
+  Plus,
+  Menu,
+  X,
+} from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { InvoiceEntity } from '@/lib/entities'
 import { createClient } from '@/lib/supabase/client'
@@ -31,6 +42,39 @@ interface ScanStatePayload {
   lastFolderScanAt: string | null
 }
 
+function AppLogo({ size = 38, icon = 22 }: { size?: number; icon?: number }) {
+  return (
+    <div
+      className="flex items-center justify-center shrink-0"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 11,
+        background: 'linear-gradient(160deg, rgb(36, 20, 84) 0%, rgb(23, 12, 58) 100%)',
+        boxShadow: 'rgba(120, 140, 200, 0.2) 0px 0px 0px 1px inset',
+      }}
+    >
+      <svg width={icon} height={icon} viewBox="0 0 44 44" fill="none">
+        <path
+          d="M8 26 C8 17 14 11 22 11 C30 11 36 17 36 26"
+          stroke="#2dd4bf"
+          strokeWidth="3.6"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <path
+          d="M17 26 L22 20 L27 26"
+          stroke="#2dd4bf"
+          strokeWidth="3.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+      </svg>
+    </div>
+  )
+}
+
 export default function InvoicesPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -39,6 +83,8 @@ export default function InvoicesPage() {
   const [showAccountantSettings, setShowAccountantSettings] = useState(false)
   const [showFolderWatch, setShowFolderWatch] = useState(false)
   const [showDriveBackup, setShowDriveBackup] = useState(false)
+  const [showMobileNav, setShowMobileNav] = useState(false)
+  const [userEmail, setUserEmail] = useState<string>('')
 
   const [filters, setFilters] = useState({
     vendor: '',
@@ -67,6 +113,13 @@ export default function InvoicesPage() {
     queryClient.invalidateQueries({ queryKey: ['invoices'] })
     queryClient.invalidateQueries({ queryKey: ['scan-state'] })
   }
+
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data }: { data: { user: { email?: string } | null } }) => {
+      setUserEmail(data.user?.email ?? '')
+    })
+  }, [])
 
   // Realtime: auto-refresh when invoices change on any device
   useEffect(() => {
@@ -121,8 +174,14 @@ export default function InvoicesPage() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredInvoices = invoices.filter((inv) => {
-    if (filters.vendor && !inv.vendor?.toLowerCase().includes(filters.vendor.toLowerCase()))
-      return false
+    if (filters.vendor) {
+      const q = filters.vendor.toLowerCase()
+      const haystack = [inv.vendor, inv.doc_number, inv.description]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
     if (filters.category && inv.category !== filters.category) return false
     if (filters.dateFrom) {
       const invDate = parseInvoiceDate(inv.date)
@@ -135,72 +194,179 @@ export default function InvoicesPage() {
     return true
   })
 
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.push('/login')
+  }
+
+  const scrollToTable = () => {
+    document.getElementById('invoices-table')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const navItems = [
+    { label: 'לוח בקרה', icon: LayoutGrid, active: true, onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) },
+    { label: 'חשבוניות', icon: FileText, onClick: scrollToTable },
+    { label: 'סריקת מייל', icon: Mail, onClick: () => setShowScanModal(true) },
+    { label: 'סריקת תיקייה', icon: FolderCog, onClick: () => setShowFolderWatch(true) },
+    { label: 'קטגוריות', icon: Tag, onClick: () => setShowCategoryManager(true) },
+    { label: 'גיבוי לדרייב', icon: Cloud, onClick: () => setShowDriveBackup(true) },
+    { label: 'הגדרות', icon: Settings, onClick: () => setShowAccountantSettings(true) },
+  ]
+
+  const userInitials = (userEmail || '?').slice(0, 2)
+
+  const sidebarContent = (
+    <>
+      <div className="flex items-center gap-2.5 px-2 pb-4 pt-1">
+        <AppLogo />
+        <span dir="ltr" className="text-[17px] font-extrabold tracking-tight">
+          InvoiceFlow
+        </span>
+      </div>
+
+      {navItems.map((item) => {
+        const Icon = item.icon
+        return (
+          <button
+            key={item.label}
+            onClick={() => {
+              setShowMobileNav(false)
+              item.onClick()
+            }}
+            className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-right text-[14.5px] transition-colors"
+            style={
+              item.active
+                ? { background: 'var(--accent)', color: 'var(--on-accent)', fontWeight: 700 }
+                : { color: 'var(--text2)', fontWeight: 500 }
+            }
+            onMouseEnter={(e) => {
+              if (!item.active) e.currentTarget.style.background = 'var(--hover)'
+            }}
+            onMouseLeave={(e) => {
+              if (!item.active) e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <Icon className="w-[18px] h-[18px] shrink-0" />
+            <span>{item.label}</span>
+          </button>
+        )
+      })}
+
+      <div className="flex-1" />
+
+      <div
+        className="flex items-center gap-2.5 rounded-xl p-3"
+        style={{ background: 'var(--input-bg)', border: '1px solid var(--border)' }}
+      >
+        <div
+          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full text-[12px] font-bold"
+          style={{
+            background: 'linear-gradient(135deg, rgb(45, 212, 191), rgb(30, 111, 143))',
+            color: 'var(--on-accent)',
+          }}
+          dir="ltr"
+        >
+          {userInitials}
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-[13px] font-semibold" dir="ltr">
+            {userEmail || '—'}
+          </span>
+          <button
+            onClick={handleLogout}
+            className="text-right text-[11.5px] transition-colors hover:underline"
+            style={{ color: 'var(--muted-mid)' }}
+          >
+            התנתקות
+          </button>
+        </div>
+      </div>
+    </>
+  )
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 overflow-x-hidden" dir="rtl">
-      <div className="w-full px-3 sm:px-6 lg:px-10 py-6 sm:py-8 space-y-4 sm:space-y-6">
+    <div dir="rtl" className="flex min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
+      {/* Sidebar — desktop */}
+      <aside
+        className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col gap-2 p-4 pt-5 lg:flex"
+        style={{ background: 'var(--panel)', borderLeft: '1px solid var(--border)' }}
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* Sidebar — mobile drawer */}
+      {showMobileNav && (
+        <div className="fixed inset-0 z-50 lg:hidden" onClick={() => setShowMobileNav(false)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <aside
+            className="absolute right-0 top-0 flex h-full w-[260px] flex-col gap-2 overflow-y-auto p-4 pt-5"
+            style={{ background: 'var(--panel)', borderLeft: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowMobileNav(false)}
+              className="absolute left-3 top-3 rounded-lg p-2"
+              style={{ color: 'var(--muted-mid)' }}
+              aria-label="סגור תפריט"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+
+      {/* Main */}
+      <main
+        className="flex min-w-0 flex-1 flex-col gap-6 px-4 pb-12 pt-6 sm:px-8 sm:pt-7"
+        style={{ background: 'var(--bg-grad)' }}
+      >
         {/* Header */}
-        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" dir="rtl">
-          <div className="text-right">
-            <div className="flex items-center gap-3 justify-end mb-1">
-              <div className="bg-gradient-to-br from-blue-400 to-indigo-500 p-2.5 rounded-xl shadow-lg shadow-blue-500/30">
-                <span className="text-2xl">🧾</span>
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-white">ניהול חשבוניות</h1>
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowMobileNav(true)}
+              className="flex h-[42px] w-[42px] items-center justify-center rounded-[11px] lg:hidden"
+              style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
+              aria-label="פתח תפריט"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="flex flex-col gap-1">
+              <h1 className="m-0 text-[22px] font-extrabold sm:text-[26px]">ניהול חשבוניות</h1>
+              <span className="text-[13px] sm:text-sm" style={{ color: 'var(--text3)' }}>
+                העלה חשבוניות PDF וצפה בנתונים שחולצו אוטומטית
+              </span>
             </div>
-            <p className="text-xs sm:text-sm text-blue-300/80">
-              העלה חשבוניות PDF וצפה בנתונים שחולצו אוטומטית
-            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 justify-end">
+          <div className="flex flex-wrap gap-2.5">
+            <button
+              onClick={() => document.getElementById('invoice-upload-input')?.click()}
+              className="flex h-[42px] items-center gap-2 rounded-[11px] px-4 text-sm font-bold"
+              style={{
+                background: 'var(--accent)',
+                color: 'var(--on-accent)',
+                boxShadow: 'rgba(45, 212, 191, 0.25) 0px 6px 16px',
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              <span>העלאת חשבוניות</span>
+            </button>
             <button
               onClick={() => setShowScanModal(true)}
-              title="סרוק מייל"
-              className="flex items-center gap-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-300 hover:text-blue-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+              className="flex h-[42px] items-center gap-2 rounded-[11px] px-4 text-sm font-medium"
+              style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
             >
-              <Mail className="w-4 h-4" />
+              <Mail className="h-4 w-4" />
               <span className="hidden sm:inline">סרוק מייל</span>
             </button>
             <button
               onClick={() => setShowFolderWatch(true)}
-              title="סריקת תיקייה"
-              className="flex items-center gap-2 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-300 hover:text-violet-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
+              className="flex h-[42px] items-center gap-2 rounded-[11px] px-4 text-sm font-medium"
+              style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
             >
-              <FolderCog className="w-4 h-4" />
+              <FolderCog className="h-4 w-4" />
               <span className="hidden sm:inline">סריקת תיקייה</span>
-            </button>
-            <button
-              onClick={() => setShowAccountantSettings(true)}
-              title="רואה חשבון"
-              className="flex items-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
-            >
-              <Mail className="w-4 h-4" />
-              <span className="hidden sm:inline">רואה חשבון</span>
-            </button>
-            <button
-              onClick={() => setShowDriveBackup(true)}
-              title="גיבוי לדרייב"
-              className="flex items-center gap-2 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
-            >
-              <HardDrive className="w-4 h-4" />
-              <span className="hidden sm:inline">גיבוי לדרייב</span>
-            </button>
-            <button
-              onClick={() => setShowCategoryManager(true)}
-              title="ניהול קטגוריות"
-              className="flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 hover:text-white text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
-            >
-              <Tag className="w-4 h-4" />
-              <span className="hidden sm:inline">ניהול קטגוריות</span>
-            </button>
-            <button
-              onClick={async () => {
-                await fetch('/api/auth/logout', { method: 'POST' })
-                router.push('/login')
-              }}
-              className="flex items-center gap-2 bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/30 text-white/50 hover:text-red-300 text-sm font-medium px-3 py-2 rounded-xl transition-all min-w-[44px] min-h-[44px] justify-center"
-              title="התנתק"
-            >
-              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -213,29 +379,27 @@ export default function InvoicesPage() {
 
         <UploadZone onInvoiceExtracted={refresh} existingInvoices={invoices} />
 
-        <InvoiceFilters filters={filters} onChange={setFilters} categories={categories} />
-
         <IncompleteInvoicesAlert invoices={invoices} onRefresh={refresh} categories={categories} />
 
         <UnsentAccountantBanner invoices={invoices} onRefresh={refresh} />
 
-        <ExportToolbar filteredInvoices={filteredInvoices} />
-
-        {filteredInvoices.length > 0 && (
-          <div className="flex items-center justify-start">
-            <span className="text-xs text-white/40">
-              מציג {filteredInvoices.length} מתוך {invoices.length} חשבוניות
-            </span>
-          </div>
-        )}
-
-        <InvoicesTable
-          invoices={filteredInvoices}
-          onRefresh={refresh}
-          isLoading={isLoading}
-          categories={categories}
-        />
-      </div>
+        <div id="invoices-table">
+          <InvoicesTable
+            invoices={filteredInvoices}
+            totalCount={invoices.length}
+            onRefresh={refresh}
+            isLoading={isLoading}
+            categories={categories}
+            toolbar={
+              <>
+                <InvoiceFilters filters={filters} onChange={setFilters} categories={categories} />
+                <div className="hidden h-6 w-px sm:block" style={{ background: 'var(--border)' }} />
+                <ExportToolbar filteredInvoices={filteredInvoices} />
+              </>
+            }
+          />
+        </div>
+      </main>
 
       <CategoryManager
         open={showCategoryManager}

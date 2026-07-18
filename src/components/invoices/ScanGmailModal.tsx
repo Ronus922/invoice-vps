@@ -185,7 +185,7 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
-        className="relative bg-slate-900 border border-white/15 rounded-2xl p-6 shadow-2xl w-full max-w-md mx-4"
+        className="relative bg-[#0e1f3d] border border-[rgba(126,152,210,0.18)] rounded-2xl p-6 shadow-2xl w-full max-w-md mx-4"
         dir="rtl"
         onClick={(e) => e.stopPropagation()}
       >

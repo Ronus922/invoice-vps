@@ -20,6 +20,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {})
     }
+    // ponytail: best-effort ask to keep cookies out of storage-pressure eviction
+    // on mobile Chrome after long idle gaps — no prompt, silently ignored if denied.
+    navigator.storage?.persist?.().catch(() => {})
   }, [])
 
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

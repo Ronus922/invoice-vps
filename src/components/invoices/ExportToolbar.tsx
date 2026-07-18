@@ -152,35 +152,38 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
   }
 
   return (
-    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2" dir="rtl">
-      <button
-        onClick={handleZip}
-        disabled={isZipping || filesCount === 0}
-        className="bg-indigo-500/20 text-indigo-300 px-4 py-2 text-sm font-medium rounded-xl flex items-center gap-2 hover:bg-indigo-500/30 border border-indigo-500/30 hover:text-indigo-200 transition-all disabled:opacity-40"
-      >
-        {isZipping ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : (
-          <Download className="w-4 h-4" />
-        )}
-        {isZipping ? 'מכין ZIP...' : `הורד ZIP (${filesCount})`}
-      </button>
+    <>
       <button
         onClick={handleCsv}
         disabled={filteredInvoices.length === 0}
-        className="flex items-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 text-sm font-medium px-4 py-2 rounded-xl transition-all disabled:opacity-40"
+        className="flex h-10 items-center gap-1.5 rounded-[10px] px-3.5 text-[13.5px] font-semibold transition-opacity disabled:opacity-40"
+        style={{
+          background: 'var(--accent-soft)',
+          border: '1px solid rgba(45, 212, 191, 0.4)',
+          color: 'var(--accent)',
+        }}
       >
-        <FileSpreadsheet className="w-4 h-4" />
-        ייצוא לאקסל ({filteredInvoices.length})
+        <FileSpreadsheet className="h-4 w-4" />
+        יצוא לאקסל
+      </button>
+      <button
+        onClick={handleZip}
+        disabled={isZipping || filesCount === 0}
+        className="flex h-10 items-center gap-1.5 rounded-[10px] px-3.5 text-[13.5px] font-medium transition-opacity disabled:opacity-40"
+        style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
+      >
+        {isZipping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+        {isZipping ? 'מכין ZIP...' : 'הורד ZIP'}
       </button>
       <button
         onClick={handlePrint}
         disabled={filteredInvoices.length === 0}
-        className="col-span-2 sm:col-span-1 flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 border border-white/15 text-white/70 hover:text-white text-sm font-medium px-4 py-2 rounded-xl transition-all disabled:opacity-40"
+        className="flex h-10 items-center gap-1.5 rounded-[10px] px-3.5 text-[13.5px] font-medium transition-opacity disabled:opacity-40"
+        style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
       >
-        <Printer className="w-4 h-4" />
-        הדפסה ({filteredInvoices.length})
+        <Printer className="h-4 w-4" />
+        הדפסה
       </button>
-    </div>
+    </>
   )
 }
