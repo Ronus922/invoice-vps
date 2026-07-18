@@ -33,3 +33,6 @@ npm-debug.log*
 # Testing
 coverage/
 .nyc_output/
+
+# Local DB backups (never commit)
+backups/

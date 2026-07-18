@@ -1,43 +1,46 @@
 # STATE
 
-Branch: `security/auth-lockdown`
+Branch: `testing/invariant-suite` (from `main`)
 
-## Status: complete, verified & tagged (`invoice-complete`)
+## Status: permanent invariant test suite added; `npm run check:all` green
 
-The security auth-lockdown work on this branch is finished and passes every
-gate I can run locally:
+Built a standing test harness for the project's critical invariants and fixed
+the real data-integrity issues it surfaced. All gates pass (exit 0):
+`typecheck → lint → 7 invariant checks`.
 
-- `npm run lint` (→ `tsc --noEmit`, strict) — PASS, exit 0
-- `npm run build` (`next build` + standalone prepare) — PASS, exit 0
+## What's on this branch
 
-Re-verified both gates on the clean tree this session; both green. The scope of
-this branch — the security auth-lockdown deliverable — is genuinely complete,
-so I created the annotated tag `invoice-complete` on the current HEAD. The tag
-marks *this branch's* completion; it is not a claim about a broader product
-spec (none is defined). Merge to `main` when ready.
+- `scripts/_lib.mjs` + 7 `scripts/check-*.mjs` — one invariant each:
+  secrets, api-auth, anon-isolation, money-balanced, currency, review-not-sent,
+  no-duplicate-invoices. Run standalone (`npm run check:money`) or all via
+  `npm run check:all`. DB checks are read-only against real data; the only
+  write test (dupe unique-index proof) runs on a throwaway DB it creates+drops.
+- `package.json` — `typecheck` + `check:*` + `check:all` scripts.
+- `TESTING.md` — per-check protection, manual browser test plan, deploy rule,
+  and the two open data-backlog items.
+- One-off ops scripts (kept for auditability): `dedup-cleanup.mjs`,
+  `reextract-legacy.mjs`, `apply-reextract.mjs`.
+- `.gitignore` — `backups/` (never commit DB dumps).
 
-## What's on this branch (vs main)
+## Fixed this session (real breakage the checks found)
 
-Security lockdown: email allowlist as single source of truth (3-layer:
-callback + middleware/proxy + helpers), private invoice-files bucket served via
-authenticated proxy, refresh_token no longer leaked in gmail callback error
-page, structured tool_use output for extraction, drive-backup progress fix.
+- **Duplicate invoices:** 20 `(vendor, doc_number)` dup groups existed with no
+  DB constraint (racy re-scan in `folder-watch.ts`). Collapsed 5 byte-identical
+  re-scan rows (412→407 after backups). 17 variant groups (invoice vs receipt,
+  manual vs auto) left for manual UI resolution — see TESTING.md.
+- **Silent money errors:** 11 legacy invoices (03–05/2026) had `pretax+vat ≠
+  total`, unflagged, already sent to the accountant. Re-extracted from source
+  PDFs: 8 corrected to right amounts, 3 flagged `needs_review` (credit note +
+  two discount cases) — tracked in `KNOWN_BACKLOG` for corrected re-send.
 
-## Fixed this session
+## Open backlog (human action)
 
-- `lint` script was dead (`next lint` removed in Next 16). Repointed to
-  `tsc --noEmit` — the strict typecheck is the real gate here; no ESLint
-  config or eslint dep exists in the repo. Stand up ESLint 10 flat config only
-  if console.log/style linting is actually wanted.
+1. 17 duplicate variant groups → resolve in UI, then add the full unique index
+   (SQL in TESTING.md).
+2. 3 `KNOWN_BACKLOG` invoices → send corrected copy to accountant, clear
+   `needs_review`, remove id from `check-needs-review-not-sent.mjs`.
 
-## Known non-blocking notes
+## Backups (gitignored, on server)
 
-- Build warns: `middleware` file convention deprecated → rename to `proxy`.
-  Works today; skipped — renaming middleware in a security branch is a
-  behavioral risk not worth taking without a reason. Do it when on Next's
-  timeline for removal.
-
-## Next (only if directed)
-
-No open task. This is a clean stopping point. Merge to `main` or define an
-acceptance checklist before tagging.
+`backups/dedup-*/` (table dump + dup JSON), `backups/reextract-*.json`,
+`backups/pre-correction-*.json`.

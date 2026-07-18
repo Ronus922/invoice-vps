@@ -8,7 +8,16 @@
     "build": "pnpm lint && next build && bash scripts/prepare-standalone.sh",
     "start": "node .next/standalone/server.js",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "check:secrets": "node scripts/check-no-secrets.mjs",
+    "check:auth": "node scripts/check-api-auth.mjs",
+    "check:anon": "node scripts/check-anon-isolation.mjs",
+    "check:money": "node scripts/check-money-balanced.mjs",
+    "check:currency": "node scripts/check-currency-valid.mjs",
+    "check:review": "node scripts/check-needs-review-not-sent.mjs",
+    "check:dupes": "node scripts/check-no-duplicate-invoices.mjs",
+    "check:all": "npm run typecheck && npm run lint && npm run check:secrets && npm run check:auth && npm run check:anon && npm run check:money && npm run check:currency && npm run check:review && npm run check:dupes"
   },
   "keywords": [],
   "author": "",
