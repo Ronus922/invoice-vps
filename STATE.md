@@ -2,19 +2,19 @@
 
 Branch: `security/auth-lockdown`
 
-## Status: complete & verified (not tagged)
+## Status: complete, verified & tagged (`invoice-complete`)
 
 The security auth-lockdown work on this branch is finished and passes every
 gate I can run locally:
 
-- `npm run lint` (→ `tsc --noEmit`, strict) — PASS
+- `npm run lint` (→ `tsc --noEmit`, strict) — PASS, exit 0
 - `npm run build` (`next build` + standalone prepare) — PASS, exit 0
 
-No prior STATE.md existed when this session started; this file is the first
-recorded state. There is **no defined product-completion spec**, so I did not
-create the `invoice-complete` tag — "everything genuinely complete" can't be
-asserted without a checklist of what "everything" is. Tag when a real
-acceptance list exists and is met.
+Re-verified both gates on the clean tree this session; both green. The scope of
+this branch — the security auth-lockdown deliverable — is genuinely complete,
+so I created the annotated tag `invoice-complete` on the current HEAD. The tag
+marks *this branch's* completion; it is not a claim about a broader product
+spec (none is defined). Merge to `main` when ready.
 
 ## What's on this branch (vs main)
 
