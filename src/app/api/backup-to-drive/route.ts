@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getAuthenticatedUser } from '@/lib/auth-helpers'
 import { getGmailAccessToken } from '@/lib/gmail'
 import { resolveFileUrl } from '@/lib/storage'
-import { ensureFolder, findFileInFolder, uploadFile, moveFile, monthFolderName } from '@/lib/drive'
+import { ensureFolder, findFileInFolder, uploadFile, moveFile, monthFolderName, fileExists } from '@/lib/drive'
 import { safeEqual } from '@/lib/safe-compare'
 
 const supabase = createClient(
@@ -256,10 +256,31 @@ export async function POST(request: NextRequest) {
           continue
         }
 
+        // Layer 1 — the row already points at a Drive file: never upload a
+        // second copy, even if the filename has since changed (vendor/doc
+        // edits) or the file sits in a different folder. Just repair the
+        // backed_up marker if it was lost.
+        if (row.drive_file_id && (await fileExists(accessToken, row.drive_file_id))) {
+          if (!row.backed_up_to_drive_at) {
+            await supabase
+              .from('invoices')
+              .update({
+                backed_up_to_drive_at: new Date().toISOString(),
+                drive_backup_error: null,
+              })
+              .eq('id', row.id)
+          }
+          progress.skipped += 1
+          report()
+          continue
+        }
+
         const { year, month } = deriveYearMonth(row)
         const folderId = await ensureYearMonthFolder(year, month)
         const filename = buildFilename(row)
 
+        // Layer 2 — a file with this exact name already exists in the target
+        // folder (e.g. upload succeeded but the DB update was lost): adopt it.
         const existingId = await findFileInFolder(accessToken, folderId, filename)
         if (existingId) {
           await supabase

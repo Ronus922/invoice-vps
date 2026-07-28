@@ -92,6 +92,15 @@ export interface UploadedFile {
   webViewLink?: string
 }
 
+// Does this file id still exist (and is not trashed)?
+export async function fileExists(accessToken: string, fileId: string): Promise<boolean> {
+  const res = await driveFetch(accessToken, `/files/${fileId}?fields=id,trashed`)
+  if (res.status === 404) return false
+  if (!res.ok) throw new Error(`Drive get file failed: ${await res.text()}`)
+  const data = await res.json()
+  return data.trashed !== true
+}
+
 export async function moveFile(
   accessToken: string,
   fileId: string,
