@@ -123,7 +123,7 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 
 ## 📚 מדריכים לפי נושא
 
-טען את המדריך הרלוונטי לפי הצורך (נוצר אוטומטית — 91 skills, 44 agents):
+טען את המדריך הרלוונטי לפי הצורך (נוצר אוטומטית — 97 skills, 50 agents):
 
 | Skill | תיאור |
 |------|------|
@@ -161,15 +161,19 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | `/excalidraw` | Generate publication-ready architecture diagrams from natural language descriptions using… |
 | `/features` | Ready-made feature patterns and components - Icons, Authentication, Dashboard, CRUD,… |
 | `/figma` | Figma MCP integration - Extract designs, tokens, components, screenshots. |
+| `/free-cc` | Reference & guardrails for free-claude-code (alishahryar1/free-claude-code, MIT) — a local… |
 | `/frontend-design` | Create distinctive, production-grade frontend interfaces with high design quality. |
 | `/fullstack-il` | Israeli Fullstack Guidelines - Next.js 15, Tailwind v4, RTL, Hebrew. |
+| `/graphify` | Deploy & operate Graphify (Graphify-Labs/graphify, MIT) — a GraphRAG tool that turns a… |
 | `/gsd` | Get Shit Done - Meta-prompting system for structured, spec-driven development with Claude Code. |
+| `/gstack` | Deploy & operate gstack (garrytan/gstack, MIT) — Garry Tan's Claude Code "virtual… |
 | `/gws` | Google Workspace orchestration via MCP tools — Gmail, Google Calendar, Drive, Docs, Sheets. |
 | `/hermes` | Deploy and manage a self-hosted Hermes Agent (Nous Research) Docker container —… |
 | `/hermes-dashboard` | Deploy & operate Hermes Dashboard Hub (chrisryugj/hermes-dashboard) — a lightweight… |
 | `/hermes-workspace` | Deploy & run Hermes Workspace (outsourc-e) — a web + Electron control plane that sits ON… |
 | `/incident-commander` | Incident response framework for production outages — severity classification, timeline… |
 | `/init` | Initialize or update project documentation (CLAUDE.md, PROJECT.md) based on codebase analysis |
+| `/kanban` | Kanban dispatch board patterns — multi-container drag-and-drop עם @dnd-kit, שיבוץ בגרירה,… |
 | `/keyboard-shortcuts` | Complete keyboard shortcuts & tooltips system for Next.js/React apps — ShortcutDef types,… |
 | `/manychat` | ManyChat Infrastructure Template - Server-side orchestration, WhatsApp/IG chatbot, state… |
 | `/mcp-builder` | Guide for building MCP (Model Context Protocol) servers — integrates external APIs/services… |
@@ -183,6 +187,7 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | `/observability` | Production observability design — SLI/SLO/SLA frameworks, error budgets, multi-window burn… |
 | `/openwa` | Deploy & operate OpenWA (rmyndharis/OpenWA) — a self-hosted WhatsApp API gateway (NestJS +… |
 | `/optimization` | Performance optimization - Caching strategies, Core Web Vitals, bundle optimization for… |
+| `/page-agent` | Deploy & operate Page Agent (alibaba/page-agent, MIT) — an IN-PAGE GUI agent that reads the… |
 | `/parallel-strategy` | Parallel Agents Strategy - מדריך מקיף לעבודה עם סוכנים מקבילים ב-Claude Code, מתי לחלק ומתי לא. |
 | `/patterstage` | Deploy & operate PatterStage "Control Hub" (Daniel-Parke/PatterStage) — a Next.js web… |
 | `/pentest` | Authorized AI penetration testing framework — systematic vulnerability testing across OWASP… |
@@ -205,6 +210,7 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | `/skill-creator` | Meta-skill for creating, evaluating, and improving Claude Code skills. |
 | `/skill-security-auditor` | Security audit for AI skills before installation — scans for command injection, prompt… |
 | `/spec-driven` | Spec-first development workflow — no code without approved spec. |
+| `/strix` | Deploy & operate Strix (usestrix/strix, Apache-2.0) — autonomous AI penetration-testing… |
 | `/supabase-cli` | Operate the official Supabase CLI (supabase/cli) — link projects, run DB migrations… |
 | `/supabase-mcp` | Register & operate the official Supabase MCP server (@supabase/mcp-server-supabase) so… |
 | `/supabase-oauth-nextjs` | Next.js 15 + Supabase OAuth Integration - PKCE flow, cookies, and auth state management. |
@@ -242,14 +248,17 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | Engineering Pro | `@.claude/agents/engineering-pro.md` | Engineering Excellence Agent — handles security audits, incident response, observability… |
 | Figma Agent | `@.claude/agents/figma.md` | Figma-to-Code Expert - Extracts designs, tokens, and components from Figma via MCP and… |
 | Fullstack Agent | `@.claude/agents/fullstack.md` | Complete Project Expert - All Skills |
+| Graphify | `@.claude/agents/graphify.md` | Deploy & operate Graphify (Graphify-Labs/graphify, MIT) — a GraphRAG tool turning code +… |
 | Hermes | `@.claude/agents/hermes.md` | Deploy & manage self-hosted Hermes Agent (Nous Research) Docker containers — gateway API,… |
 | Hermes Dashboard | `@.claude/agents/hermes-dashboard.md` | Deploy & operate Hermes Dashboard Hub (chrisryugj/hermes-dashboard) — a lightweight… |
 | Hermes Workspace | `@.claude/agents/hermes-workspace.md` | Deploy & run Hermes Workspace (outsourc-e) — web + Electron control plane over the Nous… |
+| Kanban Agent | `@.claude/agents/kanban.md` | Kanban Dispatch Board Expert - לוחות שיבוץ עם גרירה (dnd-kit multi-container), order_index… |
 | ManyChat Agent | `@.claude/agents/manychat.md` | ManyChat Infrastructure Expert - Server-side chatbot orchestration, WhatsApp/IG flows,… |
 | Mission Control | `@.claude/agents/mission-control.md` | Deploy & operate Mission Control (builderz-labs) — self-hosted Next.js dashboard for… |
 | Mobile Agent | `@.claude/agents/mobile.md` | Responsive Adaptation Expert - Makes every page/component fully responsive across 9 screen… |
 | Native Agent | `@.claude/agents/native.md` | React Native & Expo Expert - Native mobile app development with Monorepo architecture |
 | OpenWA | `@.claude/agents/openwa.md` | Deploy & operate OpenWA (rmyndharis/OpenWA) — a self-hosted WhatsApp API gateway (NestJS +… |
+| Page Agent | `@.claude/agents/page-agent.md` | Deploy & operate Page Agent (alibaba/page-agent, MIT) — an in-page GUI agent (DOM-as-text,… |
 | Patterstage | `@.claude/agents/patterstage.md` | Deploy & operate PatterStage "Control Hub" (Daniel-Parke) — a Next.js web command-center… |
 | Performance Agent | `@.claude/agents/performance.md` | Optimization Expert - Web Vitals, Caching |
 | Ponytail | `@.claude/agents/ponytail.md` | Ponytail — the "lazy senior dev" minimalism reviewer (DietrichGebert/ponytail, vendored &… |
@@ -259,12 +268,15 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | Scale | `@.claude/agents/scale.md` | Three-tier model-routing specialist ("the perfect scale", iron-rule #14) — classifies every… |
 | Security Agent | `@.claude/agents/security.md` | Application Security Expert - Auth, RLS |
 | Site Health | `@.claude/agents/site-health.md` | Uptime & self-heal expert — deploys and operates the site-health mechanism (DB-touching… |
+| Strix | `@.claude/agents/strix.md` | Deploy & operate Strix (usestrix/strix, Apache-2.0) — autonomous AI pentest agents in a… |
 | Supabase CLI | `@.claude/agents/supabase-cli.md` | Operate the Supabase CLI (supabase/cli) fleet-wide — link projects, run DB migrations… |
 | Supabase MCP | `@.claude/agents/supabase-mcp.md` | Register & operate the official Supabase MCP server (@supabase/mcp-server-supabase) for… |
 | UI/UX Review Agent | `@.claude/agents/uiux-review.md` | Visual Quality Expert - Reviews existing UI for design consistency, RTL, spacing,… |
 | agent-reach | `@.claude/agents/agent-reach.md` | Deploy & operate Agent-Reach (Panniantong/Agent-Reach, MIT) — a one-CLI capability layer… |
 | codebase-memory | `@.claude/agents/codebase-memory.md` | Operate codebase-memory-mcp (DeusData/codebase-memory-mcp, MIT) — the code-structure memory… |
+| free-cc | `@.claude/agents/free-cc.md` | Reference & guardrails agent for free-claude-code (alishahryar1/free-claude-code, MIT) — a… |
 | fs-dev | `@.claude/agents/hebrew-fullstack-dev.md` | Use this agent when working on Next.js/React projects that require Hebrew communication,… |
+| gstack | `@.claude/agents/gstack.md` | Deploy & operate gstack (garrytan/gstack, MIT) — Garry Tan's Claude Code skill pack (~23… |
 | n8n Agent | `@.claude/agents/n8n.md` | Automation & Workflows Expert |
 | no-mistakes | `@.claude/agents/no-mistakes.md` | Operate no-mistakes (kunchenguid/no-mistakes, MIT) — the pre-push AI quality gate. |
 | simplex | `@.claude/agents/simplex.md` | Deploy & operate a private, metadata-free SimpleX ops-alert bot (simplex-chat/simplex-chat,… |
