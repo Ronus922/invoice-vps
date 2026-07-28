@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from '@/lib/auth-helpers'
 import { getGmailAccessToken } from '@/lib/gmail'
 import { resolveFileUrl } from '@/lib/storage'
 import { ensureFolder, findFileInFolder, uploadFile, moveFile, monthFolderName } from '@/lib/drive'
+import { safeEqual } from '@/lib/safe-compare'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -65,7 +66,7 @@ async function authorize(request: NextRequest): Promise<{ ok: true } | { ok: fal
   if (user) return { ok: true }
 
   const secret = request.headers.get('x-cron-secret')
-  if (secret && process.env.CRON_SECRET && secret === process.env.CRON_SECRET) {
+  if (secret && process.env.CRON_SECRET && safeEqual(secret, process.env.CRON_SECRET)) {
     return { ok: true }
   }
 

@@ -137,3 +137,32 @@ No markdown fences, no explanations — ONLY the JSON object.`
 // 'claude-opus-4-7' (higher cost).
 export const INVOICE_EXTRACTION_MODEL = 'claude-sonnet-4-6'
 export const INVOICE_EXTRACTION_MAX_TOKENS = 2048
+
+// ponytail: force structured output via tool_use so the SDK returns parsed
+// JSON — Hebrew values like `בע"מ` carry literal quotes that break JSON.parse
+// on the raw text. Field docs stay in INVOICE_EXTRACTION_PROMPT. Shared by
+// every extraction path (manual upload + Gmail scan) so the schema can't drift.
+export const EXTRACTION_TOOL = {
+  name: 'return_invoice',
+  description: 'Return the extracted invoice fields.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      date: { type: 'string' },
+      vendor: { type: 'string' },
+      doc_number: { type: 'string' },
+      doc_type: {
+        type: 'string',
+        enum: ['invoice', 'receipt', 'invoice_receipt', 'credit_note', 'other', 'unknown'],
+      },
+      description: { type: 'string' },
+      currency: { type: 'string' },
+      pretax: { type: ['number', 'null'] },
+      vat: { type: ['number', 'null'] },
+      total: { type: ['number', 'null'] },
+      payment_method: { type: 'string' },
+      category: { type: 'string' },
+    },
+    required: ['date', 'vendor', 'total', 'currency'],
+  },
+}

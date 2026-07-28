@@ -4,21 +4,14 @@
 //   re-checks it — so no invoice can be sent WHILE it needs review.
 //   The DB proxy: no row is (needs_review=true AND sent_to_accountant_at set).
 //
-// KNOWN LEGACY BACKLOG: three invoices were sent to the accountant BEFORE
-//   arithmetic validation existed, then corrected + flagged on 2026-07-18
-//   (see scripts/apply-reextract.mjs). They now need a CORRECTED copy re-sent
-//   to the accountant, after which needs_review is cleared and they drop off
-//   this list automatically. They are listed explicitly (not hidden): the
-//   check still FAILS on any *other* needs_review+sent invoice — i.e. it fully
-//   catches new regressions. Remove each id here once its corrected copy is
-//   re-sent.
+// KNOWN LEGACY BACKLOG: invoices sent to the accountant BEFORE arithmetic
+//   validation existed, listed explicitly (not hidden) so the check still
+//   FAILS on any *other* needs_review+sent invoice. Remove each id once
+//   resolved. The original three (2026-07-18) were deleted from the DB and
+//   removed here on 2026-07-28 — the set is currently empty.
 import { run, psql, fail, ok, info } from './_lib.mjs'
 
-const KNOWN_BACKLOG = new Set([
-  'a0bb4e86-7c0f-4f8b-84d3-1e9a1eb0bc2b', // יחיאל שדר 855931801  — total 250, pretax+vat=253.90
-  '4d6f8ce0-a5cd-46d9-ab78-a3c44a5796e1', // יחיאל שדר 1040193419 — total 150, pretax+vat=148.60
-  'ca2ef55c-da21-4a1b-a381-03d18780f176', // פזגז 44100314533     — credit note, total −104.1
-])
+const KNOWN_BACKLOG = new Set([])
 
 run('check-needs-review-not-sent', async () => {
   const rows = psql(`

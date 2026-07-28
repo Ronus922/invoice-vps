@@ -206,7 +206,11 @@ export async function runFolderScan(
               vendor: extracted.vendor || '',
               date: extracted.date || '',
             }),
-          }).catch(() => {})
+          })
+            .then((sendRes) => {
+              if (!sendRes.ok) console.error('[folder-watch] accountant send failed:', sendRes.status)
+            })
+            .catch((sendErr) => console.error('[folder-watch] accountant send failed:', sendErr))
         }
 
         progress.created += 1

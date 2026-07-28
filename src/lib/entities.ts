@@ -20,6 +20,8 @@ export interface Invoice {
   updated_at: string
   created_by: string | null
   needs_review: boolean
+  // pretax+vat were computed from total (VAT not printed / not reconcilable).
+  vat_derived?: boolean
   validation_error: string | null
   extraction_raw: ExtractionRaw | null
   sent_to_accountant_at: string | null

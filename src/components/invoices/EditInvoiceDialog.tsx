@@ -149,6 +149,14 @@ export default function EditInvoiceDialog({
           <DialogTitle className="text-right">עריכת חשבונית</DialogTitle>
         </DialogHeader>
 
+        {!invoice.needs_review && invoice.vat_derived && (
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-right">
+            <p className="text-xs text-blue-300/90">
+              מע״מ לא הופיע בחשבונית — חושב אוטומטית מהסה״כ. אפשר לתקן ידנית.
+            </p>
+          </div>
+        )}
+
         {invoice.needs_review && (
           <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 text-right">
             <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />

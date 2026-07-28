@@ -6,7 +6,8 @@
 //   and check-needs-review-not-sent keeps it out of the accountant export).
 //   So the real failure is an unsound invoice that is NOT flagged — a wrong
 //   number treated as final. That is what must be zero.
-// Read-only against the real DB. Mirrors src/lib/invoice-validation.ts.
+// Read-only against the real DB. Mirrors src/lib/invoice-validation.ts and
+// (for derived rows) src/lib/vat-derivation.ts.
 import { run, scalar, fail, ok, info } from './_lib.mjs'
 
 const UNSOUND = `(
@@ -35,4 +36,18 @@ run('check-money-balanced', async () => {
   const flagged = scalar(`
     select count(*) from public.invoices where needs_review = true and ${UNSOUND}`)
   if (flagged !== '0') info(`${flagged} חשבוניות לא-מאוזנות מסומנות needs_review (תקין — ממתינות לתיקון ידני)`)
+
+  // Derived rows (vat_derived=true) are balanced BY CONSTRUCTION — pretax/vat
+  // computed from total in src/lib/vat-derivation.ts. Any derived row that is
+  // null/unbalanced means the helper and this mirror drifted.
+  const badDerived = scalar(`
+    select count(*) from public.invoices
+    where vat_derived = true
+      and (pretax is null or vat is null or total is null or total <= 0
+           or abs((pretax + vat) - total) > greatest(0.05, total * 0.005))`)
+  if (badDerived === '0') ok('כל השורות עם מע״מ מחושב (vat_derived) מאוזנות')
+  else fail(`${badDerived} שורות vat_derived לא מאוזנות — סטייה בין vat-derivation.ts לחישוב בפועל`)
+
+  const derivedCount = scalar(`select count(*) from public.invoices where vat_derived = true`)
+  if (derivedCount !== '0') info(`${derivedCount} חשבוניות עם מע״מ מחושב מהסה״כ (vat_derived)`)
 })

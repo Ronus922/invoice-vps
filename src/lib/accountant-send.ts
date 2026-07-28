@@ -10,9 +10,25 @@ const supabase = createClient(
 export interface SendInput {
   invoiceId?: string | null
   fileUrl: string
+  // Human-readable name for the email attachment (storage keys are uuids).
+  fileName?: string | null
   vendor?: string | null
   date?: string | null
   needsReview?: boolean
+}
+
+// MIME headers reject quotes/CRLF (header injection via attacker-supplied
+// Gmail filenames); a bare storage path is not a valid URL for `new URL`.
+function safeAttachmentFilename(input: SendInput): string {
+  const fromName = (input.fileName || '').replace(/["\r\n]/g, '').trim()
+  if (fromName) return fromName
+  const path = input.fileUrl.split('?')[0]
+  const last = path.split('/').pop() || 'invoice.pdf'
+  try {
+    return decodeURIComponent(last).replace(/["\r\n]/g, '') || 'invoice.pdf'
+  } catch {
+    return 'invoice.pdf'
+  }
 }
 
 export interface SendResult {
@@ -117,8 +133,7 @@ export async function sendInvoiceToAccountant(input: SendInput): Promise<SendRes
 
     const fileBuffer = Buffer.from(await fileRes.arrayBuffer())
     const contentType = fileRes.headers.get('content-type') || 'application/pdf'
-    const urlPath = new URL(input.fileUrl).pathname
-    const filename = decodeURIComponent(urlPath.split('/').pop() || 'invoice.pdf')
+    const filename = safeAttachmentFilename(input)
 
     const subject = input.vendor
       ? `חשבונית - ${input.vendor}${input.date ? ` - ${input.date}` : ''}`

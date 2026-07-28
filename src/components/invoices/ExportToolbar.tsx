@@ -10,6 +10,17 @@ interface ExportToolbarProps {
   filteredInvoices: Invoice[]
 }
 
+// Invoice fields originate from AI extraction over emailed documents — treat
+// them as untrusted in every non-JSX sink.
+const escapeHtml = (v: unknown) =>
+  String(v).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
+  )
+
+// Excel/Sheets execute cells starting with = + - @ (formula injection). Text
+// fields only — numeric cells must stay raw so negative credit notes parse.
+const csvSafe = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v)
+
 export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarProps) {
   const [isZipping, setIsZipping] = useState(false)
 
@@ -22,13 +33,13 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
       .map(
         (inv) => `
       <tr>
-        <td>${inv.date || '—'}</td>
-        <td>${inv.vendor || '—'}</td>
-        <td>${inv.doc_number || '—'}</td>
-        <td>${inv.description || '—'}</td>
-        <td>${currencySymbol(inv.currency)}${(inv.total || 0).toLocaleString('he-IL')}</td>
-        <td>${inv.payment_method || '—'}</td>
-        <td>${inv.category || '—'}</td>
+        <td>${escapeHtml(inv.date || '—')}</td>
+        <td>${escapeHtml(inv.vendor || '—')}</td>
+        <td>${escapeHtml(inv.doc_number || '—')}</td>
+        <td>${escapeHtml(inv.description || '—')}</td>
+        <td>${escapeHtml(currencySymbol(inv.currency))}${(inv.total || 0).toLocaleString('he-IL')}</td>
+        <td>${escapeHtml(inv.payment_method || '—')}</td>
+        <td>${escapeHtml(inv.category || '—')}</td>
       </tr>`
       )
       .join('')
@@ -87,16 +98,16 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
       'קטגוריה',
     ]
     const rows = filteredInvoices.map((inv) => [
-      inv.date || '',
-      inv.vendor || '',
-      inv.doc_number || '',
-      inv.description || '',
-      inv.currency || 'ILS',
+      csvSafe(inv.date || ''),
+      csvSafe(inv.vendor || ''),
+      csvSafe(inv.doc_number || ''),
+      csvSafe(inv.description || ''),
+      csvSafe(inv.currency || 'ILS'),
       inv.pretax ?? '',
       inv.vat ?? '',
       inv.total ?? '',
-      inv.payment_method || '',
-      inv.category || '',
+      csvSafe(inv.payment_method || ''),
+      csvSafe(inv.category || ''),
     ])
     const csvContent =
       '\uFEFF' +

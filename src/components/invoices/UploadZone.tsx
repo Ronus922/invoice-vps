@@ -149,7 +149,11 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
                 vendor: extracted.vendor || '',
                 date: extracted.date || '',
               }),
-            }).catch(() => {})
+            })
+              .then((sendRes) => {
+                if (!sendRes.ok) console.error('[upload] accountant send failed:', sendRes.status)
+              })
+              .catch((sendErr) => console.error('[upload] accountant send failed:', sendErr))
           }
           setQueue((prev) =>
             prev.map((q) =>
