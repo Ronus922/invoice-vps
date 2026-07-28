@@ -29,7 +29,7 @@ interface InvoiceRow {
 }
 
 interface ProgressSnapshot {
-  phase: 'init' | 'uploading' | 'done'
+  phase: 'init' | 'reorganizing' | 'uploading' | 'done'
   total: number
   processed: number
   uploaded: number
@@ -149,6 +149,9 @@ export async function POST(request: NextRequest) {
       errors: 0,
     }
     const report = () => onProgress?.({ ...progress })
+    // Publish a snapshot immediately — until the first report the UI has no
+    // run progress and would fall back to the cumulative backed-up ratio.
+    report()
 
     const accessToken = await getGmailAccessToken()
     const rootId = await getRootFolderId(accessToken)
@@ -181,8 +184,16 @@ export async function POST(request: NextRequest) {
 
     if (backedError) throw new Error(`DB select failed: ${backedError.message}`)
 
+    // Reorganize is bookkeeping, not transfer — the UI shows a phase label and
+    // keeps the bar at 0% until uploading starts.
+    progress.phase = 'reorganizing'
+    progress.total = (backedRows as InvoiceRow[] | null)?.length ?? 0
+    report()
+
     for (const row of (backedRows as InvoiceRow[] | null) ?? []) {
       if (!row.drive_file_id) continue
+      progress.processed += 1
+      if (progress.processed % 10 === 0) report()
       try {
         const { year, month } = deriveYearMonth(row)
         const folderId = await ensureYearMonthFolder(year, month)
@@ -222,7 +233,10 @@ export async function POST(request: NextRequest) {
     if (selectError) throw new Error(`DB select failed: ${selectError.message}`)
 
     const invoices: InvoiceRow[] = (rows as InvoiceRow[] | null) ?? []
+    // The bar is scoped to THIS run's transfers: 0% at the first pending
+    // invoice, 100% at the last.
     progress.total = invoices.length
+    progress.processed = 0
     progress.phase = 'uploading'
     report()
 

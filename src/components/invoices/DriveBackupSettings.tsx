@@ -105,13 +105,24 @@ export default function DriveBackupSettings() {
   const total = totalBackedUp + pendingCount
   const running = status?.running === true
   const runProgress = running ? (status?.progress ?? null) : null
-  const ratio = runProgress
-    ? runProgress.total > 0
+  // While a backup runs, the bar is scoped to THIS run's transfers only —
+  // 0% at the first pending invoice, 100% at the last. The cumulative
+  // backed-up ratio is shown only at rest (otherwise a run "starts" at 90%+).
+  const uploading = runProgress?.phase === 'uploading' || runProgress?.phase === 'done'
+  const ratio = running
+    ? uploading && runProgress && runProgress.total > 0
       ? Math.round((runProgress.processed / runProgress.total) * 100)
       : 0
     : total > 0
       ? Math.round((totalBackedUp / total) * 100)
       : 0
+  const runLabel = !running
+    ? `${ratio}%`
+    : !runProgress || runProgress.phase === 'init'
+      ? 'מתחיל גיבוי...'
+      : runProgress.phase === 'reorganizing'
+        ? `מסדר קבצים קיימים בדרייב... (${runProgress.processed}/${runProgress.total})`
+        : `מגבה ${runProgress.processed}/${runProgress.total} (${ratio}%)`
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4" dir="rtl">
@@ -160,11 +171,7 @@ export default function DriveBackupSettings() {
           style={{ width: `${ratio}%` }}
         />
       </div>
-      <p className="text-[11px] text-white/50 text-center mb-3">
-        {running && runProgress
-          ? `מגבה ברקע... ${runProgress.processed}/${runProgress.total}`
-          : `${ratio}%`}
-      </p>
+      <p className="text-[11px] text-white/50 text-center mb-3">{runLabel}</p>
 
       {status?.lastError && !running && (
         <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 flex items-start gap-2">
