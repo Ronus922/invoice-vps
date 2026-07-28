@@ -19,11 +19,13 @@ export async function POST(request: NextRequest) {
     }
 
     let needsReview = false
+    let alreadySentAt: string | null = null
+    let fileName: string | null = null
     let resolvedId = invoice_id || null
     if (!resolvedId) {
       const { data: invoice } = await supabase
         .from('invoices')
-        .select('id, needs_review')
+        .select('id, needs_review, sent_to_accountant_at, file_name')
         .eq('file_url', file_url)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -31,19 +33,30 @@ export async function POST(request: NextRequest) {
       if (invoice) {
         resolvedId = invoice.id
         needsReview = Boolean(invoice.needs_review)
+        alreadySentAt = invoice.sent_to_accountant_at
+        fileName = invoice.file_name
       }
     } else {
       const { data: invoice } = await supabase
         .from('invoices')
-        .select('needs_review')
+        .select('needs_review, sent_to_accountant_at, file_name')
         .eq('id', resolvedId)
         .maybeSingle()
       needsReview = Boolean(invoice?.needs_review)
+      alreadySentAt = invoice?.sent_to_accountant_at ?? null
+      fileName = invoice?.file_name ?? null
+    }
+
+    // Idempotency: a double click / second tab must not email the accountant
+    // twice for the same invoice.
+    if (alreadySentAt) {
+      return NextResponse.json({ skipped: true, reason: 'already_sent' })
     }
 
     const result = await sendInvoiceToAccountant({
       invoiceId: resolvedId,
       fileUrl: file_url,
+      fileName,
       vendor,
       date,
       needsReview,

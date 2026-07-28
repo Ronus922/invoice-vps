@@ -2,6 +2,7 @@ import { updateSession } from '@/lib/supabase/middleware'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { isAllowedEmail } from '@/lib/auth-allowlist'
+import { safeEqual } from '@/lib/safe-compare'
 
 export async function middleware(request: NextRequest) {
   // Always refresh the session first
@@ -20,7 +21,7 @@ export async function middleware(request: NextRequest) {
   // Cron endpoints — authorized by shared secret header instead of user session
   if (pathname === '/api/backup-to-drive' || pathname === '/api/scan-gmail') {
     const secret = request.headers.get('x-cron-secret')
-    if (secret && process.env.CRON_SECRET && secret === process.env.CRON_SECRET) {
+    if (secret && process.env.CRON_SECRET && safeEqual(secret, process.env.CRON_SECRET)) {
       return response
     }
   }

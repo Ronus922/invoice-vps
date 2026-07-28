@@ -24,7 +24,14 @@ export async function POST(request: NextRequest) {
   const user = await getAuthenticatedUser()
   if (!user) return unauthorizedResponse()
 
-  const formData = await request.formData()
+  let formData: FormData
+  try {
+    formData = await request.formData()
+  } catch {
+    // Malformed multipart body (aborted upload, bad client) — a clean 400
+    // instead of an unhandled non-JSON 500.
+    return NextResponse.json({ error: 'בקשה לא תקינה' }, { status: 400 })
+  }
   const file = formData.get('file') as File | null
 
   if (!file) {

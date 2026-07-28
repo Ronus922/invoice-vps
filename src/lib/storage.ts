@@ -24,12 +24,11 @@ export async function signedUrlFor(fileUrl: string, ttlSeconds = 120): Promise<s
 
 // Resolve a stored file_url to a directly-fetchable URL for SERVER-side fetching:
 //  - our bucket object  -> short-lived signed URL
-//  - external/legacy URL (base44) -> returned unchanged (still publicly hosted)
-//  - unmappable         -> null
+//  - anything else      -> null
+// The old passthrough for legacy external (base44) URLs was an SSRF vector —
+// callers fetch the result server-side. All rows now live in the bucket
+// (verified 2026-07-28: 428/428 file_urls on our Supabase host), so external
+// URLs are simply rejected like signedUrlFor does.
 export async function resolveFileUrl(fileUrl: string, ttlSeconds = 120): Promise<string | null> {
-  const path = storagePathFromFileUrl(fileUrl)
-  if (!path) return fileUrl.startsWith('http') ? fileUrl : null
-  const { data, error } = await admin.storage.from(BUCKET).createSignedUrl(path, ttlSeconds)
-  if (error || !data) return null
-  return data.signedUrl
+  return signedUrlFor(fileUrl, ttlSeconds)
 }

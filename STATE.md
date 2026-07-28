@@ -1,43 +1,65 @@
 # STATE
 
-Branch: `security/auth-lockdown`
+Branch: `testing/invariant-suite` (from `main`)
 
-## Status: complete, verified & tagged (`invoice-complete`)
+## Status: doc_type identity key added; `npm run check:all` green
 
-The security auth-lockdown work on this branch is finished and passes every
-gate I can run locally:
+Document identity is now `(vendor, doc_number, doc_type)` — a vendor can issue an
+Invoice and a Receipt (or חשבונית מס / קבלה / חשבונית מס-קבלה / חשבונית זיכוי) under
+one number. Standing invariant harness still green (exit 0):
+`typecheck → lint → 8 invariant checks`.
 
-- `npm run lint` (→ `tsc --noEmit`, strict) — PASS, exit 0
-- `npm run build` (`next build` + standalone prepare) — PASS, exit 0
+## doc_type work (2026-07-18)
 
-Re-verified both gates on the clean tree this session; both green. The scope of
-this branch — the security auth-lockdown deliverable — is genuinely complete,
-so I created the annotated tag `invoice-complete` on the current HEAD. The tag
-marks *this branch's* completion; it is not a claim about a broader product
-spec (none is defined). Merge to `main` when ready.
+- **Schema:** `20260718_add_doc_type.sql` — `doc_type text not null default 'unknown'`
+  + CHECK (`invoice, receipt, invoice_receipt, credit_note, other, unknown`) + a
+  **partial** unique index on `(vendor, doc_number, doc_type)` anchored at
+  `created_at >= max+1s`, protecting new data now without waiting for legacy.
+- **Backfill:** `scripts/backfill-doc-type.mjs` (backup → migrate → classify →
+  unify → verify → index). Distribution: unknown 296 / invoice 65 / receipt 44.
+  8 of the 17 old variant groups (all Anthropic) auto-split into invoice+receipt;
+  9 remain for Ronen's UI resolution (see TESTING.md).
+- **Write-time dedup:** `/api/invoices` POST returns `{ duplicate: true }` on the
+  index conflict (23505) instead of creating a dup — closes the racy-rescan and
+  parallel-scan window. Same key extended to `scan-gmail` dedup, `UploadZone` +
+  `folder-watch` pre-checks, and Drive/ZIP backup filenames.
+- **check:dupes** rewritten to the new key; throwaway-DB proof now covers the
+  partial index (incl. legacy grandfathering) AND the full index.
 
-## What's on this branch (vs main)
+## What's on this branch
 
-Security lockdown: email allowlist as single source of truth (3-layer:
-callback + middleware/proxy + helpers), private invoice-files bucket served via
-authenticated proxy, refresh_token no longer leaked in gmail callback error
-page, structured tool_use output for extraction, drive-backup progress fix.
+- `scripts/_lib.mjs` + 8 `scripts/check-*.mjs` — one invariant each:
+  secrets, api-auth, source-enum, anon-isolation, money-balanced, currency,
+  review-not-sent, no-duplicate-invoices. Run standalone (`npm run check:money`)
+  or all via `npm run check:all`. DB checks are read-only against real data; the
+  only write test (dupe unique-index proof) runs on a throwaway DB it creates+drops.
+- `src/lib/doc-type.ts` — `DocType` enum + `normalizeDocType()` (mirrors the DB CHECK).
+- `package.json` — `typecheck` + `check:*` + `check:all` scripts.
+- `TESTING.md` — per-check protection, manual browser test plan, deploy rule,
+  and the open data-backlog items.
+- One-off ops scripts (kept for auditability): `backfill-doc-type.mjs`,
+  `dedup-cleanup.mjs`, `reextract-legacy.mjs`, `apply-reextract.mjs`.
+- `.gitignore` — `backups/` (never commit DB dumps).
 
-## Fixed this session
+## Fixed this session (real breakage the checks found)
 
-- `lint` script was dead (`next lint` removed in Next 16). Repointed to
-  `tsc --noEmit` — the strict typecheck is the real gate here; no ESLint
-  config or eslint dep exists in the repo. Stand up ESLint 10 flat config only
-  if console.log/style linting is actually wanted.
+- **Duplicate invoices:** 20 `(vendor, doc_number)` dup groups existed with no
+  DB constraint (racy re-scan in `folder-watch.ts`). Collapsed 5 byte-identical
+  re-scan rows (412→407 after backups). 17 variant groups (invoice vs receipt,
+  manual vs auto) left for manual UI resolution — see TESTING.md.
+- **Silent money errors:** 11 legacy invoices (03–05/2026) had `pretax+vat ≠
+  total`, unflagged, already sent to the accountant. Re-extracted from source
+  PDFs: 8 corrected to right amounts, 3 flagged `needs_review` (credit note +
+  two discount cases) — tracked in `KNOWN_BACKLOG` for corrected re-send.
 
-## Known non-blocking notes
+## Open backlog (human action)
 
-- Build warns: `middleware` file convention deprecated → rename to `proxy`.
-  Works today; skipped — renaming middleware in a security branch is a
-  behavioral risk not worth taking without a reason. Do it when on Next's
-  timeline for removal.
+1. 9 duplicate variant groups → resolve in UI, then DROP the partial index and
+   create the full unique index (SQL in TESTING.md).
+2. 3 `KNOWN_BACKLOG` invoices → send corrected copy to accountant, clear
+   `needs_review`, remove id from `check-needs-review-not-sent.mjs`.
 
-## Next (only if directed)
+## Backups (gitignored, on server)
 
-No open task. This is a clean stopping point. Merge to `main` or define an
-acceptance checklist before tagging.
+`backups/doctype-*/` (full table dump + JSON), `backups/dedup-*/`,
+`backups/reextract-*.json`, `backups/pre-correction-*.json`.

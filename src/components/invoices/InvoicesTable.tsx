@@ -339,7 +339,13 @@ export default function InvoicesTable({
                     <span className="text-[13px] font-bold text-white/70">סה&quot;כ</span>
                     <span
                       className={`text-sm font-bold inline-flex items-center gap-1 ${inv.needs_review ? 'text-red-400' : 'text-emerald-400'}`}
-                      title={inv.needs_review ? inv.validation_error || 'נדרשת בדיקת סכומים' : undefined}
+                      title={
+                        inv.needs_review
+                          ? inv.validation_error || 'נדרשת בדיקת סכומים'
+                          : inv.vat_derived
+                            ? 'מע״מ חושב מהסה״כ'
+                            : undefined
+                      }
                     >
                       {inv.needs_review && <AlertTriangle className="w-3.5 h-3.5" />}
                       {formatCurrency(inv.total, inv.currency)}
@@ -438,7 +444,13 @@ export default function InvoicesTable({
                     <TableCell
                       className="text-right text-[13.5px] font-bold"
                       style={{ color: inv.needs_review ? 'rgb(248, 113, 113)' : 'var(--accent)' }}
-                      title={inv.needs_review ? inv.validation_error || 'נדרשת בדיקת סכומים' : undefined}
+                      title={
+                        inv.needs_review
+                          ? inv.validation_error || 'נדרשת בדיקת סכומים'
+                          : inv.vat_derived
+                            ? 'מע״מ חושב מהסה״כ'
+                            : undefined
+                      }
                     >
                       <span className="inline-flex items-center gap-1">
                         {inv.needs_review && (

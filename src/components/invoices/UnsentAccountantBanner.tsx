@@ -29,20 +29,25 @@ export default function UnsentAccountantBanner({
     if (isSending) return
     setIsSending(true)
     try {
-      await Promise.all(
-        unsent.map((inv) =>
-          fetch('/api/send-to-accountant', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              invoice_id: inv.id,
-              file_url: inv.file_url,
-              vendor: inv.vendor || '',
-              date: inv.date || '',
-            }),
-          }).catch(() => null)
+      // Batches of 3 — an unbounded Promise.all over dozens of invoices trips
+      // Gmail rate limits; the server also skips already-sent rows.
+      const BATCH = 3
+      for (let i = 0; i < unsent.length; i += BATCH) {
+        await Promise.all(
+          unsent.slice(i, i + BATCH).map((inv) =>
+            fetch('/api/send-to-accountant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                invoice_id: inv.id,
+                file_url: inv.file_url,
+                vendor: inv.vendor || '',
+                date: inv.date || '',
+              }),
+            }).catch(() => null)
+          )
         )
-      )
+      }
     } finally {
       setIsSending(false)
       onRefresh()

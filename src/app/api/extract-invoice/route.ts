@@ -5,37 +5,16 @@ import {
   INVOICE_EXTRACTION_PROMPT,
   INVOICE_EXTRACTION_MODEL,
   INVOICE_EXTRACTION_MAX_TOKENS,
+  EXTRACTION_TOOL,
 } from '@/lib/invoice-extraction-prompt'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { resolveFileUrl } from '@/lib/storage'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
+import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { normalizeCurrency } from '@/lib/format'
+import { normalizeDocType } from '@/lib/doc-type'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-
-// ponytail: force structured output via tool_use so the SDK returns parsed
-// JSON — Hebrew values like `בע"מ` carry literal quotes that break JSON.parse
-// on the raw text. Field docs stay in INVOICE_EXTRACTION_PROMPT.
-const EXTRACTION_TOOL: Anthropic.Tool = {
-  name: 'return_invoice',
-  description: 'Return the extracted invoice fields.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      date: { type: 'string' },
-      vendor: { type: 'string' },
-      doc_number: { type: 'string' },
-      description: { type: 'string' },
-      currency: { type: 'string' },
-      pretax: { type: ['number', 'null'] },
-      vat: { type: ['number', 'null'] },
-      total: { type: ['number', 'null'] },
-      payment_method: { type: 'string' },
-      category: { type: 'string' },
-    },
-    required: ['date', 'vendor', 'total', 'currency'],
-  },
-}
 
 export async function POST(request: NextRequest) {
   const user = await getAuthenticatedUser()
@@ -103,9 +82,21 @@ export async function POST(request: NextRequest) {
         toolBlock && 'input' in toolBlock ? toolBlock.input : parseExtractedJson(text)
       ) as Record<string, unknown>
       data.currency = normalizeCurrency(data.currency)
+      data.doc_type = normalizeDocType(data.doc_type)
+      const extractedPretax = typeof data.pretax === 'number' ? data.pretax : null
+      const extractedVat = typeof data.vat === 'number' ? data.vat : null
+      const derivation = deriveVatFromTotal({
+        pretax: extractedPretax,
+        vat: extractedVat,
+        total: typeof data.total === 'number' ? data.total : null,
+        currency: typeof data.currency === 'string' ? data.currency : null,
+        date: typeof data.date === 'string' ? data.date : null,
+      })
+      data.pretax = derivation.pretax
+      data.vat = derivation.vat
       const validation = validateInvoiceArithmetic({
-        pretax: typeof data.pretax === 'number' ? data.pretax : null,
-        vat: typeof data.vat === 'number' ? data.vat : null,
+        pretax: derivation.pretax,
+        vat: derivation.vat,
         total: typeof data.total === 'number' ? data.total : null,
       })
       const extraction_raw = {
@@ -115,9 +106,19 @@ export async function POST(request: NextRequest) {
         validation_error: validation.reason,
         scanned_at: new Date().toISOString(),
         source: 'manual' as const,
+        ...(derivation.vatDerived
+          ? {
+              vat_derivation: {
+                rate: derivation.rate,
+                derived_at: new Date().toISOString(),
+                original: { pretax: extractedPretax, vat: extractedVat },
+              },
+            }
+          : {}),
       }
       return NextResponse.json({
         ...data,
+        vat_derived: derivation.vatDerived,
         needs_review: !validation.ok,
         validation_error: validation.reason,
         extraction_raw,

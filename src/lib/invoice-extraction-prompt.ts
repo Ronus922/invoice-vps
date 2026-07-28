@@ -101,11 +101,27 @@ Some invoices show several totals (line subtotals, periodic subtotals, grand tot
 ## INVOICE NUMBER
 Look for: מספר חשבונית / חשבונית מס מספר / Invoice # / מס' קבלה / doc number in header
 
+## DOCUMENT TYPE — סוג המסמך (קריטי!)
+Identify the document type from its PRINTED TITLE/HEADER (not from the content).
+The SAME number can appear on both an invoice and a receipt — the type keeps them
+apart. Return one of these exact codes in "doc_type":
+- "invoice"          — חשבונית מס / חשבונית / Tax Invoice / Invoice
+- "receipt"          — קבלה / Receipt
+- "invoice_receipt"  — חשבונית מס קבלה / חשבונית מס-קבלה / Tax Invoice-Receipt (a single
+                       document that is BOTH — very common in Israel)
+- "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note (usually a negative/refund total)
+- "other"            — a clearly different document type (proforma, quote, delivery note)
+- "unknown"          — the printed title is missing or you cannot tell
+Read the title at the TOP of the document. "חשבונית מס/קבלה" or "חשבונית מס קבלה" ⇒
+"invoice_receipt". A plain "חשבונית מס" ⇒ "invoice". A plain "קבלה" ⇒ "receipt".
+When in doubt, return "unknown" — never guess.
+
 Return ONLY this JSON:
 {
   "date": "DD/MM/YYYY (issue date, NOT billing period)",
   "vendor": "exact vendor name as printed (issuer, NOT customer)",
   "doc_number": "invoice/receipt number",
+  "doc_type": "one of: invoice, receipt, invoice_receipt, credit_note, other, unknown",
   "description": "short Hebrew description of what was purchased/charged",
   "currency": "ISO 4217 code: ILS, USD, EUR, GBP, ... — matches the symbol on the invoice",
   "pretax": number (before VAT, in the SAME currency as 'currency'),
@@ -121,3 +137,32 @@ No markdown fences, no explanations — ONLY the JSON object.`
 // 'claude-opus-4-7' (higher cost).
 export const INVOICE_EXTRACTION_MODEL = 'claude-sonnet-4-6'
 export const INVOICE_EXTRACTION_MAX_TOKENS = 2048
+
+// ponytail: force structured output via tool_use so the SDK returns parsed
+// JSON — Hebrew values like `בע"מ` carry literal quotes that break JSON.parse
+// on the raw text. Field docs stay in INVOICE_EXTRACTION_PROMPT. Shared by
+// every extraction path (manual upload + Gmail scan) so the schema can't drift.
+export const EXTRACTION_TOOL = {
+  name: 'return_invoice',
+  description: 'Return the extracted invoice fields.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      date: { type: 'string' },
+      vendor: { type: 'string' },
+      doc_number: { type: 'string' },
+      doc_type: {
+        type: 'string',
+        enum: ['invoice', 'receipt', 'invoice_receipt', 'credit_note', 'other', 'unknown'],
+      },
+      description: { type: 'string' },
+      currency: { type: 'string' },
+      pretax: { type: ['number', 'null'] },
+      vat: { type: ['number', 'null'] },
+      total: { type: ['number', 'null'] },
+      payment_method: { type: 'string' },
+      category: { type: 'string' },
+    },
+    required: ['date', 'vendor', 'total', 'currency'],
+  },
+}

@@ -8,11 +8,17 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { sendInvoiceToAccountant } from '@/lib/accountant-send'
 import { normalizeCurrency } from '@/lib/format'
+import { normalizeDocType } from '@/lib/doc-type'
 import {
   INVOICE_EXTRACTION_PROMPT,
   INVOICE_EXTRACTION_MODEL,
   INVOICE_EXTRACTION_MAX_TOKENS,
+  EXTRACTION_TOOL,
 } from '@/lib/invoice-extraction-prompt'
+import { deriveVatFromTotal } from '@/lib/vat-derivation'
+import { coerceRequiredIdentityFields } from '@/lib/invoice-write'
+import { v4 as uuidv4 } from 'uuid'
+import { safeEqual } from '@/lib/safe-compare'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -63,6 +69,19 @@ interface GmailPart {
 }
 
 const INLINE_IMAGE_SIZE_THRESHOLD = 30 * 1024
+
+// Aligned with /api/upload (and nginx client_max_body_size).
+const MAX_FILE_SIZE = 20 * 1024 * 1024
+
+// Storage keys and content types derive from this allowlist — never from the
+// sender-supplied filename/MIME header (path traversal / type spoofing).
+const EXT_TO_CONTENT_TYPE: Record<string, string> = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+}
 
 function collectAttachmentParts(part: GmailPart, acc: GmailPart[] = []): GmailPart[] {
   if (part.body?.attachmentId && part.filename) {
@@ -134,6 +153,7 @@ interface ExtractedInvoice {
   date?: string
   vendor?: string
   doc_number?: string
+  doc_type?: string
   description?: string
   currency?: string
   pretax?: number
@@ -234,11 +254,32 @@ async function processAttachment(
 
   const b64 = base64urlToBase64(b64url)
   const buffer = Buffer.from(b64, 'base64')
+  if (buffer.length === 0 || buffer.length > MAX_FILE_SIZE) {
+    return { status: 'error', filename }
+  }
 
-  const storagePath = `invoices/gmail_${Date.now()}_${filename}`
+  // Extension from the sender filename only when it's in the allowlist;
+  // otherwise fall back to the declared MIME type. Both must agree with the
+  // allowlist or the attachment is rejected.
+  const extFromName = filename.toLowerCase().split('.').pop() || ''
+  const ext = EXT_TO_CONTENT_TYPE[extFromName]
+    ? extFromName
+    : mimeType === 'application/pdf'
+      ? 'pdf'
+      : mimeType === 'image/png'
+        ? 'png'
+        : mimeType === 'image/jpeg'
+          ? 'jpg'
+          : mimeType === 'image/webp'
+            ? 'webp'
+            : ''
+  const contentType = EXT_TO_CONTENT_TYPE[ext]
+  if (!contentType) return { status: 'error', filename }
+
+  const storagePath = `invoices/gmail_${Date.now()}_${uuidv4()}.${ext}`
   const { error: uploadError } = await supabase.storage
     .from('invoice-files')
-    .upload(storagePath, buffer, { contentType: mimeType || 'application/pdf' })
+    .upload(storagePath, buffer, { contentType })
 
   if (uploadError) return { status: 'error', filename }
 
@@ -246,12 +287,14 @@ async function processAttachment(
     data: { publicUrl: file_url },
   } = supabase.storage.from('invoice-files').getPublicUrl(storagePath)
 
-  const isPdf = mimeType === 'application/pdf' || filename.toLowerCase().endsWith('.pdf')
+  const isPdf = contentType === 'application/pdf'
 
   try {
     const result = await anthropic.messages.create({
       model: INVOICE_EXTRACTION_MODEL,
       max_tokens: INVOICE_EXTRACTION_MAX_TOKENS,
+      tools: [EXTRACTION_TOOL],
+      tool_choice: { type: 'tool', name: EXTRACTION_TOOL.name },
       messages: [
         {
           role: 'user',
@@ -265,7 +308,7 @@ async function processAttachment(
                   type: 'image' as const,
                   source: {
                     type: 'base64' as const,
-                    media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+                    media_type: contentType as 'image/jpeg' | 'image/png' | 'image/webp',
                     data: b64,
                   },
                 },
@@ -275,10 +318,17 @@ async function processAttachment(
       ],
     })
 
+    // tool_use.input is already-parsed JSON; fall back to text parse only if
+    // the model somehow returned no tool call (Hebrew `בע"מ` quotes break
+    // JSON.parse on raw text).
+    const toolBlock = result.content.find((b) => b.type === 'tool_use')
     const textBlock = result.content.find((b) => b.type === 'text')
     const text = textBlock && 'text' in textBlock ? textBlock.text : ''
-    const extracted = parseExtractedJson(text) as ExtractedInvoice
+    const extracted = (
+      toolBlock && 'input' in toolBlock ? toolBlock.input : parseExtractedJson(text)
+    ) as ExtractedInvoice
     extracted.currency = normalizeCurrency(extracted.currency)
+    extracted.doc_type = normalizeDocType(extracted.doc_type)
     const vendor = String(extracted.vendor || '').trim()
     if (vendor) {
       const remembered = vendorCategoryMemory.get(normalizeVendorName(vendor))
@@ -287,17 +337,35 @@ async function processAttachment(
       }
     }
 
+    // VAT fallback: when extraction left pretax/vat empty (or unbalanced) but
+    // the total is valid, derive them from the total instead of flagging.
+    const extractedPretax = extracted.pretax ?? null
+    const extractedVat = extracted.vat ?? null
+    const derivation = deriveVatFromTotal({
+      pretax: extractedPretax,
+      vat: extractedVat,
+      total: extracted.total ?? null,
+      currency: extracted.currency ?? null,
+      date: extracted.date ?? null,
+    })
+    extracted.pretax = derivation.pretax ?? undefined
+    extracted.vat = derivation.vat ?? undefined
+
     const validation = validateInvoiceArithmetic({
-      pretax: extracted.pretax ?? null,
-      vat: extracted.vat ?? null,
+      pretax: derivation.pretax,
+      vat: derivation.vat,
       total: extracted.total ?? null,
     })
 
     if (extracted.doc_number) {
+      // Dedup on the full identity key (vendor, doc_number, doc_type): an Invoice
+      // and a Receipt sharing one number are DIFFERENT documents and must both be
+      // allowed. Re-scans of the same document get the same doc_type ⇒ deduped.
       const duplicateQuery = supabase
         .from('invoices')
         .select('id')
         .eq('doc_number', String(extracted.doc_number))
+        .eq('doc_type', extracted.doc_type)
         .limit(1)
 
       if (vendor) {
@@ -311,38 +379,64 @@ async function processAttachment(
       }
     }
 
-    const { data: inserted } = await supabase
-      .from('invoices')
-      .insert({
-        ...extracted,
-        file_url,
-        file_name: filename || `invoice_${Date.now()}.pdf`,
-        source: 'gmail',
-        created_by: createdBy,
-        needs_review: !validation.ok,
+    const insertPayload: Record<string, unknown> = {
+      ...extracted,
+      file_url,
+      file_name: filename || `invoice_${Date.now()}.pdf`,
+      source: 'gmail',
+      created_by: createdBy,
+      needs_review: !validation.ok,
+      vat_derived: derivation.vatDerived,
+      validation_error: validation.reason,
+      extraction_raw: {
+        model: INVOICE_EXTRACTION_MODEL,
+        raw_text: text,
+        parsed: extracted,
         validation_error: validation.reason,
-        extraction_raw: {
-          model: INVOICE_EXTRACTION_MODEL,
-          raw_text: text,
-          parsed: extracted,
-          validation_error: validation.reason,
-          scanned_at: new Date().toISOString(),
-          source: 'gmail',
-        },
-      })
+        scanned_at: new Date().toISOString(),
+        source: 'gmail',
+        ...(derivation.vatDerived
+          ? {
+              vat_derivation: {
+                rate: derivation.rate,
+                derived_at: new Date().toISOString(),
+                original: { pretax: extractedPretax, vat: extractedVat },
+              },
+            }
+          : {}),
+      },
+    }
+    // DB has NOT NULL on vendor/doc_number — coerce to '' + needs_review
+    // instead of losing the invoice on an insert failure.
+    coerceRequiredIdentityFields(insertPayload)
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('invoices')
+      .insert(insertPayload)
       .select('id')
       .single()
+
+    if (insertError) {
+      // Unique index (vendor, doc_number, doc_type) — same document re-scanned.
+      if (insertError.code === '23505') {
+        return { status: 'duplicate', filename, vendor: extracted.vendor }
+      }
+      console.error('[scan-gmail] insert failed:', insertError, 'file:', filename)
+      return { status: 'error', filename }
+    }
 
     if (vendor && extracted.category) {
       vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
     }
 
+    const needsReview = Boolean(insertPayload.needs_review)
     sendInvoiceToAccountant({
-      invoiceId: inserted?.id ?? null,
+      invoiceId: inserted.id,
       fileUrl: file_url,
+      fileName: filename || null,
       vendor: extracted.vendor,
       date: extracted.date,
-      needsReview: !validation.ok,
+      needsReview,
     }).catch((err) => console.error('[scan-gmail] accountant send error:', err))
 
     return { status: 'created', filename, vendor: extracted.vendor }
@@ -412,7 +506,7 @@ async function authorize(
   request: NextRequest
 ): Promise<{ ok: true; userId: string | null } | { ok: false; res: ReturnType<typeof unauthorizedResponse> }> {
   const cronSecret = request.headers.get('x-cron-secret')
-  if (cronSecret && process.env.CRON_SECRET && cronSecret === process.env.CRON_SECRET) {
+  if (cronSecret && process.env.CRON_SECRET && safeEqual(cronSecret, process.env.CRON_SECRET)) {
     return { ok: true, userId: null }
   }
   const user = await getAuthenticatedUser()
@@ -568,6 +662,7 @@ export async function POST(request: NextRequest) {
         const filename = part.filename || ''
         const hasSupportedFile = isSupportedInvoiceFile(filename)
         if (!hasSupportedFile) continue
+        if ((part.body?.size || 0) > MAX_FILE_SIZE) continue
         if (isInlineDecorativeImage(part)) continue
         if (isObviousNonInvoice(subject, sender, filename)) continue
 
@@ -588,6 +683,18 @@ export async function POST(request: NextRequest) {
 
     const allDetails: (ProcessResult | null)[] = []
     const BATCH = 5
+
+    // One scanned_emails row per message: accumulate all its attachments and
+    // upsert once, instead of a per-attachment upsert that overwrites siblings.
+    interface EmailScanSummary {
+      emailDate: string | null
+      sender: string
+      subject: string
+      names: string[]
+      found: number
+      anyError: boolean
+    }
+    const emailSummaries = new Map<string, EmailScanSummary>()
 
     for (let i = 0; i < attachmentJobs.length; i += BATCH) {
       const batch = attachmentJobs.slice(i, i + BATCH)
@@ -618,16 +725,31 @@ export async function POST(request: NextRequest) {
         }
         report()
 
-        await recordScannedEmail(
-          job.msgId,
-          job.emailDate,
-          job.sender,
-          job.subject,
-          [job.part.filename || 'unknown'],
-          result?.status === 'created' ? 1 : 0,
-          result ? 'scanned' : 'error'
-        )
+        const summary = emailSummaries.get(job.msgId) || {
+          emailDate: job.emailDate,
+          sender: job.sender,
+          subject: job.subject,
+          names: [],
+          found: 0,
+          anyError: false,
+        }
+        summary.names.push(job.part.filename || 'unknown')
+        if (result?.status === 'created') summary.found += 1
+        if (!result) summary.anyError = true
+        emailSummaries.set(job.msgId, summary)
       }
+    }
+
+    for (const [msgId, summary] of emailSummaries) {
+      await recordScannedEmail(
+        msgId,
+        summary.emailDate,
+        summary.sender,
+        summary.subject,
+        summary.names,
+        summary.found,
+        summary.anyError ? 'error' : 'scanned'
+      )
     }
 
     progress.phase = 'finalizing'
