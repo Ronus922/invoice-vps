@@ -175,55 +175,62 @@ export async function POST(request: NextRequest) {
 
     let lastError: string | null = null
 
-    // Pass 1 — reorganize already-backed-up files into their created_at folder
-    const { data: backedRows, error: backedError } = await supabase
-      .from('invoices')
-      .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
-      .not('drive_file_id', 'is', null)
-      .order('created_at', { ascending: true })
+    // Pass 1 (force only) — reorganize already-backed-up files into their
+    // created_at folder and re-queue files deleted from Drive. This is a
+    // repair/migration sweep over EVERY backed row (hundreds of Drive calls);
+    // on a normal run new uploads already land in the right year/month folder,
+    // so the sweep would only delay backing up the new invoices.
+    if (force) {
+      const { data: backedRows, error: backedError } = await supabase
+        .from('invoices')
+        .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
+        .not('drive_file_id', 'is', null)
+        .order('created_at', { ascending: true })
 
-    if (backedError) throw new Error(`DB select failed: ${backedError.message}`)
+      if (backedError) throw new Error(`DB select failed: ${backedError.message}`)
 
-    // Reorganize is bookkeeping, not transfer — the UI shows a phase label and
-    // keeps the bar at 0% until uploading starts.
-    progress.phase = 'reorganizing'
-    progress.total = (backedRows as InvoiceRow[] | null)?.length ?? 0
-    report()
+      // Reorganize is bookkeeping, not transfer — the UI shows a phase label
+      // and keeps the bar at 0% until uploading starts.
+      progress.phase = 'reorganizing'
+      progress.total = (backedRows as InvoiceRow[] | null)?.length ?? 0
+      report()
 
-    for (const row of (backedRows as InvoiceRow[] | null) ?? []) {
-      if (!row.drive_file_id) continue
-      progress.processed += 1
-      if (progress.processed % 10 === 0) report()
-      try {
-        const { year, month } = deriveYearMonth(row)
-        const folderId = await ensureYearMonthFolder(year, month)
-        const result = await moveFile(accessToken, row.drive_file_id, folderId)
-        if (result === 'missing') {
+      for (const row of (backedRows as InvoiceRow[] | null) ?? []) {
+        if (!row.drive_file_id) continue
+        progress.processed += 1
+        if (progress.processed % 10 === 0) report()
+        try {
+          const { year, month } = deriveYearMonth(row)
+          const folderId = await ensureYearMonthFolder(year, month)
+          const result = await moveFile(accessToken, row.drive_file_id, folderId)
+          if (result === 'missing') {
+            await supabase
+              .from('invoices')
+              .update({
+                backed_up_to_drive_at: null,
+                drive_file_id: null,
+                drive_backup_error: 'file missing in Drive, will re-upload',
+              })
+              .eq('id', row.id)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'unknown'
+          lastError = message
           await supabase
             .from('invoices')
-            .update({
-              backed_up_to_drive_at: null,
-              drive_file_id: null,
-              drive_backup_error: 'file missing in Drive, will re-upload',
-            })
+            .update({ drive_backup_error: `reorg: ${message}`.slice(0, 500) })
             .eq('id', row.id)
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'unknown'
-        lastError = message
-        await supabase
-          .from('invoices')
-          .update({ drive_backup_error: `reorg: ${message}`.slice(0, 500) })
-          .eq('id', row.id)
       }
     }
 
-    // Pass 2 — upload pending invoices (backed_up_to_drive_at IS NULL)
+    // Pass 2 — upload pending invoices (backed_up_to_drive_at IS NULL),
+    // newest first so the invoices just uploaded reach Drive immediately.
     const query = supabase
       .from('invoices')
       .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
       .not('file_url', 'is', null)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
 
     if (!force) {
       query.is('backed_up_to_drive_at', null)
