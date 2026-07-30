@@ -22,6 +22,7 @@ interface ScanResult {
   skipped: number
   skippedAlreadyScanned: number
   errors: number
+  rejected?: number
   totalChecked: number
   newChecked: number
   lastScanAt: string | null
@@ -354,12 +355,18 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
             </div>
 
             {/* Extra stats row */}
-            {(result.duplicates > 0 || result.errors > 0) && (
+            {(result.duplicates > 0 || result.errors > 0 || (result.rejected ?? 0) > 0) && (
               <div className="flex gap-2">
                 {result.duplicates > 0 && (
                   <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2 text-center">
                     <p className="text-sm font-bold text-white/50">{result.duplicates}</p>
                     <p className="text-[10px] text-white/30">כפילויות</p>
+                  </div>
+                )}
+                {(result.rejected ?? 0) > 0 && (
+                  <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2 text-center">
+                    <p className="text-sm font-bold text-white/50">{result.rejected}</p>
+                    <p className="text-[10px] text-white/30">לא חשבוניות — נדחו</p>
                   </div>
                 )}
                 {result.errors > 0 && (

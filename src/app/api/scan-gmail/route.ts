@@ -8,7 +8,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { sendInvoiceToAccountant, drainUnsentToAccountant } from '@/lib/accountant-send'
 import { normalizeCurrency } from '@/lib/format'
-import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
+import { normalizeDocType, isNonInvoiceDocType } from '@/lib/doc-type'
 import { fetchWithRetry } from '@/lib/http-retry'
 import {
   INVOICE_EXTRACTION_PROMPT,
@@ -141,6 +141,13 @@ const NEGATIVE_INVOICE_TERMS = [
   'report',
   'תעודת משלוח',
   'delivery note',
+  'חוזה',
+  'הסכם',
+  'contract',
+  'פרוטוקול',
+  'מכתב',
+  'כתב תביעה',
+  'פסק דין',
 ]
 
 // Bump whenever the veto rules above change — previously vetoed messages are
@@ -148,9 +155,10 @@ const NEGATIVE_INVOICE_TERMS = [
 const FILTER_VERSION = 2
 
 interface ProcessResult {
-  status: 'created' | 'duplicate' | 'error'
+  status: 'created' | 'duplicate' | 'error' | 'rejected'
   filename: string
   vendor?: string
+  reason?: string
 }
 
 interface ProgressSnapshot {
@@ -162,6 +170,7 @@ interface ProgressSnapshot {
   created: number
   duplicates: number
   errors: number
+  rejected: number
 }
 
 interface ExtractedInvoice {
@@ -381,6 +390,30 @@ async function processAttachment(
     ) as ExtractedInvoice
     extracted.currency = normalizeCurrency(extracted.currency)
     extracted.doc_type = normalizeDocType(extracted.doc_type)
+
+    // POSITIVE intake gate (policy 2026-07-30): only bookable documents enter
+    // the system from email. 'other' (contracts, letters, quotes, legal docs)
+    // is rejected outright — logged in scanned_emails.skipped_attachments,
+    // never a review row for the user to triage. 'unknown' passes only with a
+    // financial signal (an amount or a document number); manual/folder uploads
+    // are deliberate and keep the softer review-flag behavior.
+    const gateTotal = Number(extracted.total ?? 0)
+    const hasFinancialSignal =
+      (Number.isFinite(gateTotal) && gateTotal > 0) ||
+      Boolean(String(extracted.doc_number ?? '').trim())
+    const bookable =
+      !isNonInvoiceDocType(extracted.doc_type) &&
+      (extracted.doc_type !== 'unknown' || hasFinancialSignal)
+    if (!bookable) {
+      await removeUploadedObject()
+      return {
+        status: 'rejected',
+        filename,
+        vendor: extracted.vendor,
+        reason: isNonInvoiceDocType(extracted.doc_type) ? 'ai_non_invoice' : 'no_financial_signal',
+      }
+    }
+
     const vendor = String(extracted.vendor || '').trim()
     if (vendor) {
       const remembered = vendorCategoryMemory.get(normalizeVendorName(vendor))
@@ -432,19 +465,15 @@ async function processAttachment(
       }
     }
 
-    // A positively-identified non-invoice (proforma / quote / delivery note)
-    // must never reach the accountant automatically — force review.
-    const nonInvoiceDoc = isNonInvoiceDocType(extracted.doc_type)
-
     const insertPayload: Record<string, unknown> = {
       ...extracted,
       file_url,
       file_name: filename || `invoice_${Date.now()}.pdf`,
       source: 'gmail',
       created_by: createdBy,
-      needs_review: !validation.ok || nonInvoiceDoc,
+      needs_review: !validation.ok,
       vat_derived: derivation.vatDerived,
-      validation_error: nonInvoiceDoc ? NON_INVOICE_REVIEW_MESSAGE : validation.reason,
+      validation_error: validation.reason,
       extraction_raw: {
         model: INVOICE_EXTRACTION_MODEL,
         raw_text: text,
@@ -666,6 +695,7 @@ export async function POST(request: NextRequest) {
       created: 0,
       duplicates: 0,
       errors: 0,
+      rejected: 0,
     }
     const report = () => onProgress?.({ ...progress })
 
@@ -732,6 +762,7 @@ export async function POST(request: NextRequest) {
         created: 0,
         duplicates: 0,
         errors: 0,
+        rejected: 0,
         skipped: 0,
         skippedAlreadyScanned,
         totalChecked: allMessages.length,
@@ -841,6 +872,9 @@ export async function POST(request: NextRequest) {
       anyError: boolean
     }
     const emailSummaries = new Map<string, EmailScanSummary>()
+    // AI-rejected attachments (non-invoice verdict) — merged into the
+    // message's skipped_attachments log alongside the keyword-filter vetoes.
+    const aiRejects = new Map<string, SkippedAttachment[]>()
 
     for (let i = 0; i < attachmentJobs.length; i += BATCH) {
       const batch = attachmentJobs.slice(i, i + BATCH)
@@ -866,6 +900,8 @@ export async function POST(request: NextRequest) {
           progress.created += 1
         } else if (result.status === 'duplicate') {
           progress.duplicates += 1
+        } else if (result.status === 'rejected') {
+          progress.rejected += 1
         } else {
           progress.errors += 1
         }
@@ -884,6 +920,11 @@ export async function POST(request: NextRequest) {
         // A failed attachment must mark the whole message 'error' — that
         // status is what re-opens it on the next scan (getSettledEmailIds).
         if (!result || result.status === 'error') summary.anyError = true
+        if (result?.status === 'rejected') {
+          const list = aiRejects.get(job.msgId) || []
+          list.push({ filename: result.filename, reason: result.reason || 'ai_non_invoice' })
+          aiRejects.set(job.msgId, list)
+        }
         emailSummaries.set(job.msgId, summary)
       }
     }
@@ -897,7 +938,7 @@ export async function POST(request: NextRequest) {
         summary.names,
         summary.found,
         summary.anyError ? 'error' : 'scanned',
-        skipMap.get(msgId) || []
+        [...(skipMap.get(msgId) || []), ...(aiRejects.get(msgId) || [])]
       )
     }
 
@@ -907,6 +948,7 @@ export async function POST(request: NextRequest) {
     let created = 0
     let duplicates = 0
     let errors = 0
+    let rejected = 0
     const details: ProcessResult[] = []
 
     for (const result of allDetails) {
@@ -917,6 +959,7 @@ export async function POST(request: NextRequest) {
       details.push(result)
       if (result.status === 'created') created++
       else if (result.status === 'duplicate') duplicates++
+      else if (result.status === 'rejected') rejected++
       else if (result.status === 'error') errors++
     }
 
@@ -930,6 +973,7 @@ export async function POST(request: NextRequest) {
       created,
       duplicates,
       errors,
+      rejected,
       skipped,
       skippedAlreadyScanned,
       totalChecked: allMessages.length,

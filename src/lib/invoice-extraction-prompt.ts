@@ -105,20 +105,28 @@ Look for: מספר חשבונית / חשבונית מס מספר / Invoice # / �
 Identify the document type from its PRINTED TITLE/HEADER (not from the content).
 The SAME number can appear on both an invoice and a receipt — the type keeps them
 apart. Return one of these exact codes in "doc_type":
-- "invoice"          — חשבונית מס / חשבונית / Tax Invoice / Invoice
+- "invoice"          — חשבונית מס / חשבונית / Tax Invoice / Invoice.
+                       ALSO periodic utility/service bills: חשבון תקופתי / חשבון לתשלום /
+                       חשבון חשמל / גז / מים / ארנונה / טלפון / תקשורת — an Israeli bill
+                       demanding payment for a period IS an invoice even when its title
+                       is only "חשבון".
 - "receipt"          — קבלה / Receipt
 - "invoice_receipt"  — חשבונית מס קבלה / חשבונית מס-קבלה / Tax Invoice-Receipt (a single
                        document that is BOTH — very common in Israel)
 - "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note (usually a negative/refund total)
-- "other"            — a clearly different document type: proforma / חשבון עסקה,
-                       הצעת מחיר / quote, תעודת משלוח / delivery note, דוח / report,
-                       דף חשבון / bank statement, הזמנת רכש / purchase order
+- "other"            — NOT a billing document at all: proforma / חשבון עסקה, הצעת מחיר /
+                       quote, תעודת משלוח / delivery note, הזמנת רכש / purchase order,
+                       חוזה / הסכם / contract, מכתב / letter, פרוטוקול / protocol,
+                       כתב תביעה / court or legal document, פסק דין, אישור / certificate,
+                       דוח / report, מדריך / manual, דף חשבון בנק או פירוט כרטיס אשראי
+                       (bank / credit-card statement — a summary, not an invoice)
 - "unknown"          — the printed title is missing or you cannot tell
 Read the title at the TOP of the document. "חשבונית מס/קבלה" or "חשבונית מס קבלה" ⇒
 "invoice_receipt". A plain "חשבונית מס" ⇒ "invoice". A plain "קבלה" ⇒ "receipt".
-A document you classify "other" is NOT booked as an invoice — read the printed title
-carefully before using it. When genuinely ambiguous, return "unknown" — never guess
-"other" for a document that might be a real invoice.
+A document you classify "other" is REJECTED and never booked — but a document that
+demands payment for goods/services (even titled just "חשבון") is an invoice, NOT other.
+When genuinely ambiguous, return "unknown" — never guess "other" for a document that
+might be a real invoice or bill.
 
 Return ONLY this JSON:
 {
