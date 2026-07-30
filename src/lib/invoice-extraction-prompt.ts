@@ -110,11 +110,15 @@ apart. Return one of these exact codes in "doc_type":
 - "invoice_receipt"  — חשבונית מס קבלה / חשבונית מס-קבלה / Tax Invoice-Receipt (a single
                        document that is BOTH — very common in Israel)
 - "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note (usually a negative/refund total)
-- "other"            — a clearly different document type (proforma, quote, delivery note)
+- "other"            — a clearly different document type: proforma / חשבון עסקה,
+                       הצעת מחיר / quote, תעודת משלוח / delivery note, דוח / report,
+                       דף חשבון / bank statement, הזמנת רכש / purchase order
 - "unknown"          — the printed title is missing or you cannot tell
 Read the title at the TOP of the document. "חשבונית מס/קבלה" or "חשבונית מס קבלה" ⇒
 "invoice_receipt". A plain "חשבונית מס" ⇒ "invoice". A plain "קבלה" ⇒ "receipt".
-When in doubt, return "unknown" — never guess.
+A document you classify "other" is NOT booked as an invoice — read the printed title
+carefully before using it. When genuinely ambiguous, return "unknown" — never guess
+"other" for a document that might be a real invoice.
 
 Return ONLY this JSON:
 {
@@ -163,6 +167,6 @@ export const EXTRACTION_TOOL = {
       payment_method: { type: 'string' },
       category: { type: 'string' },
     },
-    required: ['date', 'vendor', 'total', 'currency'],
+    required: ['date', 'vendor', 'total', 'currency', 'doc_type'],
   },
 }

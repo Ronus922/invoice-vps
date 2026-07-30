@@ -94,6 +94,79 @@ async function recordOutcome(
   }
 }
 
+export interface DrainResult {
+  attempted: number
+  sent: number
+  failed: number
+}
+
+// Safety net: nothing stays permanently unsent. Retries every pending row
+// (uses the partial index invoices_accountant_pending_idx) — covers process
+// restarts mid-send, transient Gmail failures, and rows fixed after review.
+// Filters on the live needs_review column, NOT accountant_send_error: that
+// string goes stale once a user fixes the amounts.
+export async function drainUnsentToAccountant(limit = 25): Promise<DrainResult> {
+  const result: DrainResult = { attempted: 0, sent: 0, failed: 0 }
+
+  // Preconditions first — without an accountant address or Gmail connection
+  // every send would fail and needlessly rewrite accountant_send_error rows.
+  const accountantEmail = await getAccountantEmail()
+  if (!accountantEmail) return result
+  try {
+    await getGmailAccessToken()
+  } catch {
+    return result
+  }
+
+  const { data: pending } = await supabase
+    .from('invoices')
+    .select('id, file_url, file_name, vendor, date')
+    .is('sent_to_accountant_at', null)
+    .eq('needs_review', false)
+    .not('file_url', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(limit)
+
+  if (!pending || pending.length === 0) return result
+
+  // Sequential batches of 3 — same Gmail rate-limit rationale as the banner.
+  const BATCH = 3
+  for (let i = 0; i < pending.length; i += BATCH) {
+    const batch = pending.slice(i, i + BATCH)
+    await Promise.all(
+      batch.map(async (row) => {
+        // Re-check just before sending — a user clicking the banner while the
+        // drain runs must not produce a duplicate email.
+        const { data: fresh } = await supabase
+          .from('invoices')
+          .select('sent_to_accountant_at, needs_review')
+          .eq('id', row.id)
+          .maybeSingle()
+        if (!fresh || fresh.sent_to_accountant_at || fresh.needs_review) return
+
+        result.attempted += 1
+        try {
+          const sendResult = await sendInvoiceToAccountant({
+            invoiceId: row.id,
+            fileUrl: row.file_url,
+            fileName: row.file_name,
+            vendor: row.vendor,
+            date: row.date,
+            needsReview: false,
+          })
+          if (sendResult.sent) result.sent += 1
+          else result.failed += 1
+        } catch (err) {
+          console.error('[accountant-send] drain send failed:', err, 'invoice:', row.id)
+          result.failed += 1
+        }
+      })
+    )
+  }
+
+  return result
+}
+
 export async function sendInvoiceToAccountant(input: SendInput): Promise<SendResult> {
   if (input.needsReview) {
     const reason = 'needs_review'

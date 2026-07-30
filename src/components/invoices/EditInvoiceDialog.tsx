@@ -46,6 +46,18 @@ const CURRENCIES = [
   { code: 'JPY', label: '¥ ין (JPY)' },
 ]
 
+// Changing doc_type here is the recovery path for AI misclassification:
+// the server recomputes needs_review on PATCH, so fixing a false 'other'
+// back to a real type releases the row for sending to the accountant.
+const DOC_TYPE_OPTIONS = [
+  { code: 'invoice', label: 'חשבונית מס' },
+  { code: 'receipt', label: 'קבלה' },
+  { code: 'invoice_receipt', label: 'חשבונית מס-קבלה' },
+  { code: 'credit_note', label: 'חשבונית זיכוי' },
+  { code: 'other', label: 'מסמך אחר (לא חשבונית)' },
+  { code: 'unknown', label: 'לא ידוע' },
+]
+
 function buildFields(currency: string) {
   const sym = currencySymbol(currency)
   return [
@@ -125,6 +137,7 @@ export default function EditInvoiceDialog({
         vat: parseFloat(String(form.vat)) || 0,
         total: parseFloat(String(form.total)) || 0,
         currency: (form.currency as string) || 'ILS',
+        doc_type: (form.doc_type as Invoice['doc_type']) || 'unknown',
         payment_method: (form.payment_method as string) || null,
         category: (form.category as string) || null,
         file_url: (form.file_url as string) || null,
@@ -200,6 +213,25 @@ export default function EditInvoiceDialog({
                 {CURRENCIES.map((c) => (
                   <SelectItem key={c.code} value={c.code}>
                     {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <Label className="text-xs text-gray-500 mb-1 block text-right">סוג מסמך</Label>
+            <Select
+              value={(form.doc_type as string) || 'unknown'}
+              onValueChange={(v) => handleChange('doc_type', v)}
+            >
+              <SelectTrigger className="text-right" dir="rtl">
+                <SelectValue placeholder="בחר..." />
+              </SelectTrigger>
+              <SelectContent>
+                {DOC_TYPE_OPTIONS.map((t) => (
+                  <SelectItem key={t.code} value={t.code}>
+                    {t.label}
                   </SelectItem>
                 ))}
               </SelectContent>

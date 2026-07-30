@@ -14,6 +14,17 @@ export const DOC_TYPES = [
 
 export type DocType = (typeof DOC_TYPES)[number]
 
+// 'other' = the AI positively identified a NON-invoice document (proforma,
+// quote, delivery note, report). Such rows must never reach the accountant
+// automatically — they are flagged needs_review with this Hebrew reason.
+// 'unknown' is NOT gated: it usually means an unreadable title on a real
+// invoice, and 74% of legacy rows carry it.
+export const NON_INVOICE_REVIEW_MESSAGE = 'מסמך שאינו חשבונית — לבדיקה'
+
+export function isNonInvoiceDocType(docType: unknown): boolean {
+  return docType === 'other'
+}
+
 // Map a printed/free-text document type (Hebrew or English, from the AI or a
 // user edit) to the canonical code. Unrecognized ⇒ 'unknown' — a SAFE default,
 // since adding doc_type to the identity key only softens uniqueness.

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { normalizeVendorName } from '@/lib/vendor-utils'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
-import { normalizeDocType } from '@/lib/doc-type'
+import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { coerceRequiredIdentityFields } from '@/lib/invoice-write'
 
@@ -138,6 +138,13 @@ export async function POST(request: NextRequest) {
   // Always store a canonical doc_type (the DB CHECK rejects anything else).
   payload.doc_type = normalizeDocType(payload.doc_type)
 
+  // A positively-identified non-invoice (proforma / quote / delivery note)
+  // must never reach the accountant automatically — force review.
+  if (isNonInvoiceDocType(payload.doc_type)) {
+    payload.needs_review = true
+    payload.validation_error = NON_INVOICE_REVIEW_MESSAGE
+  }
+
   coerceRequiredIdentityFields(payload)
 
   // VAT fallback: when extraction left pretax/vat empty (or unbalanced) but the
@@ -214,10 +221,14 @@ export async function PATCH(request: NextRequest) {
 
   const touchedAmounts =
     'pretax' in updates || 'vat' in updates || 'total' in updates
-  if (touchedAmounts) {
+  const touchedDocType = 'doc_type' in updates
+  // Recompute review state when amounts change OR doc_type changes — flipping
+  // a false-positive 'other' back to 'invoice' must clear the review flag, and
+  // marking a row 'other' must set it.
+  if (touchedAmounts || touchedDocType) {
     const { data: current } = await supabase
       .from('invoices')
-      .select('pretax, vat, total, currency, date')
+      .select('pretax, vat, total, currency, date, doc_type')
       .eq('id', id)
       .single()
 
@@ -233,16 +244,20 @@ export async function PATCH(request: NextRequest) {
       currency: current?.currency ?? null,
       date: current?.date ?? null,
     })
-    updates.pretax = derivation.pretax
-    updates.vat = derivation.vat
-    updates.vat_derived = derivation.vatDerived
+    if (touchedAmounts) {
+      updates.pretax = derivation.pretax
+      updates.vat = derivation.vat
+      updates.vat_derived = derivation.vatDerived
+    }
     const validation = validateInvoiceArithmetic({
       pretax: derivation.pretax,
       vat: derivation.vat,
       total: merged.total,
     })
-    updates.needs_review = !validation.ok
-    updates.validation_error = validation.reason
+    const effectiveDocType = touchedDocType ? updates.doc_type : current?.doc_type
+    const nonInvoice = isNonInvoiceDocType(effectiveDocType)
+    updates.needs_review = !validation.ok || nonInvoice
+    updates.validation_error = nonInvoice ? NON_INVOICE_REVIEW_MESSAGE : validation.reason
   }
 
   const { data, error } = await supabase

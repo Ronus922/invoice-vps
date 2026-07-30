@@ -71,6 +71,7 @@ function formatDate(iso: string | null): string {
 export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps) {
   const [status, setStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle')
   const [mode, setMode] = useState<'quick' | 'full'>('quick')
+  const [allowRescan, setAllowRescan] = useState(false)
   const [result, setResult] = useState<ScanResult | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [scanInfo, setScanInfo] = useState<ScanStatus | null>(null)
@@ -104,8 +105,9 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          maxMessages: mode === 'full' ? 200 : 100,
+          maxMessages: mode === 'full' ? 500 : 100,
           mode,
+          allowRescan: mode === 'full' && allowRescan,
           streamProgress: true,
         }),
       })
@@ -263,6 +265,20 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
                 ? 'סורק רק מיילים חדשים מאז הסריקה האחרונה (ולא סורק שוב מייל שכבר נסרק)'
                 : 'סורק היסטורית את כל התיבה (מדלג על מיילים שכבר נסרקו)'}
             </p>
+
+            {mode === 'full' && (
+              <label className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowRescan}
+                  onChange={(e) => setAllowRescan(e.target.checked)}
+                  className="w-4 h-4 accent-amber-400 cursor-pointer"
+                />
+                <span className="text-xs text-white/60">
+                  סרוק מחדש גם מיילים שכבר נסרקו (כולל כאלה שנפסלו בעבר)
+                </span>
+              </label>
+            )}
 
             <button
               onClick={handleScan}

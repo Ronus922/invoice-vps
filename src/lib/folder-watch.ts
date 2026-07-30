@@ -107,7 +107,49 @@ async function listSupportedFiles(
   return out
 }
 
+// NotFoundError = the file is already gone, which IS the goal state (a
+// concurrent run or the user removed it). Treat as success — reporting it as
+// a failure is what produced the false "לא ניתן למחוק מהתיקייה" errors.
+async function removeSourceFile(
+  dirHandle: FileSystemDirectoryHandle,
+  name: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await dirHandle.removeEntry(name)
+    return { ok: true }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NotFoundError') return { ok: true }
+    return { ok: false, error: err instanceof Error ? err.message : 'unknown' }
+  }
+}
+
+// One scan at a time — across the auto-scan on page load, the manual dialog
+// scan, and other tabs. Overlapping scans used to double-process files and
+// then fail deleting what the other run already deleted.
+const SCAN_LOCK_NAME = 'invoiceflow-folder-scan'
+let scanLockHeldFallback = false // same-tab guard when Web Locks is unavailable
+
+// Returns null when another scan already holds the lock.
 export async function runFolderScan(
+  dirHandle: FileSystemDirectoryHandle,
+  existingInvoices: Invoice[],
+  onProgress?: (snap: FolderScanProgress) => void
+): Promise<FolderScanResult | null> {
+  if (typeof navigator !== 'undefined' && 'locks' in navigator) {
+    return navigator.locks.request(SCAN_LOCK_NAME, { ifAvailable: true }, async (lock) =>
+      lock ? runFolderScanLocked(dirHandle, existingInvoices, onProgress) : null
+    )
+  }
+  if (scanLockHeldFallback) return null
+  scanLockHeldFallback = true
+  try {
+    return await runFolderScanLocked(dirHandle, existingInvoices, onProgress)
+  } finally {
+    scanLockHeldFallback = false
+  }
+}
+
+async function runFolderScanLocked(
   dirHandle: FileSystemDirectoryHandle,
   existingInvoices: Invoice[],
   onProgress?: (snap: FolderScanProgress) => void
@@ -136,7 +178,17 @@ export async function runFolderScan(
     report()
 
     try {
-      const file = await fileHandle.getFile()
+      let file: File
+      try {
+        file = await fileHandle.getFile()
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'NotFoundError') {
+          // File vanished after listing (consumed elsewhere) — nothing to do.
+          progress.duplicates += 1
+          continue
+        }
+        throw err
+      }
       const fileUrl = await uploadFile(file)
 
       const res = await fetch('/api/extract-invoice', {
@@ -170,10 +222,10 @@ export async function runFolderScan(
       if (isDuplicate) {
         progress.duplicates += 1
         // Treat duplicate as a successful processing — remove the source file.
-        try {
-          await dirHandle.removeEntry(name)
-        } catch (err) {
-          errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${err instanceof Error ? err.message : 'unknown'})`)
+        const removed = await removeSourceFile(dirHandle, name)
+        if (!removed.ok) {
+          errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
+          progress.errors += 1
         }
         continue
       }
@@ -195,32 +247,43 @@ export async function runFolderScan(
           rememberVendorCategory(extracted.vendor, extracted.category)
         }
 
-        const needsReview = Boolean(extracted.needs_review)
+        // Server-computed flag (may differ from `extracted` — e.g. a non-invoice
+        // doc_type forces review on insert).
+        const needsReview = Boolean(created.needs_review)
         if (!needsReview) {
-          // Fire-and-forget: send to accountant only when arithmetic checks out.
-          fetch('/api/send-to-accountant', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              file_url: fileUrl,
-              vendor: extracted.vendor || '',
-              date: extracted.date || '',
-            }),
-          })
-            .then((sendRes) => {
-              if (!sendRes.ok) console.error('[folder-watch] accountant send failed:', sendRes.status)
+          // Awaited: the fire-and-forget version resolved after the UI refresh,
+          // leaving sent rows painted as unsent until a manual click.
+          try {
+            const sendRes = await fetch('/api/send-to-accountant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                invoice_id: created.id,
+                file_url: fileUrl,
+                vendor: extracted.vendor || '',
+                date: extracted.date || '',
+              }),
             })
-            .catch((sendErr) => console.error('[folder-watch] accountant send failed:', sendErr))
+            const sendData = await sendRes.json().catch(() => null)
+            if (!sendRes.ok || sendData?.sent !== true) {
+              console.error(
+                '[folder-watch] accountant send not sent:',
+                sendData?.reason || sendData?.error || sendRes.status
+              )
+            }
+          } catch (sendErr) {
+            console.error('[folder-watch] accountant send failed:', sendErr)
+          }
         }
 
         progress.created += 1
       }
 
       // File processed (created or duplicate) — remove it from the folder.
-      try {
-        await dirHandle.removeEntry(name)
-      } catch (err) {
-        errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${err instanceof Error ? err.message : 'unknown'})`)
+      const removed = await removeSourceFile(dirHandle, name)
+      if (!removed.ok) {
+        errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
+        progress.errors += 1
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'שגיאה לא ידועה'

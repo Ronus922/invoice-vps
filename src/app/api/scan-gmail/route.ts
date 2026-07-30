@@ -6,9 +6,10 @@ import { parseExtractedJson } from '@/lib/ai-json-parse'
 import { normalizeVendorName } from '@/lib/vendor-utils'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
-import { sendInvoiceToAccountant } from '@/lib/accountant-send'
+import { sendInvoiceToAccountant, drainUnsentToAccountant } from '@/lib/accountant-send'
 import { normalizeCurrency } from '@/lib/format'
-import { normalizeDocType } from '@/lib/doc-type'
+import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
+import { fetchWithRetry } from '@/lib/http-retry'
 import {
   INVOICE_EXTRACTION_PROMPT,
   INVOICE_EXTRACTION_MODEL,
@@ -25,7 +26,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// SDK retries 429/529/5xx with backoff natively; default is 2 attempts.
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 4 })
+
+// One scan at a time (mirrors backup-to-drive's activeRun): overlapping runs
+// double-fetch Gmail and double-bill extraction. Module-level is safe — the
+// standalone server is a single long-lived process.
+let activeScan = false
 
 function base64urlToBase64(b64url: string): string {
   return b64url.replace(/-/g, '+').replace(/_/g, '/')
@@ -38,14 +45,15 @@ async function fetchAttachmentData(
   messageId: string,
   attachmentId: string
 ): Promise<string | null> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attachmentId}`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(20000),
-    }
+    { headers: { Authorization: `Bearer ${accessToken}` } }
   )
-  if (!res.ok) return null
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    console.error('[scan-gmail] attachment fetch failed:', res.status, errText.slice(0, 300))
+    return null
+  }
   const data = await res.json()
   return data.data
 }
@@ -121,16 +129,23 @@ const POSITIVE_INVOICE_TERMS = [
   'חשבונית-מס',
 ]
 
+// 'statement' was removed on purpose: real invoices arrive as "Your monthly
+// statement" (see isObviousNonInvoice's comment). 'דוחות' is listed explicitly
+// because boundary matching stops 'דוח' from matching inside the plural.
 const NEGATIVE_INVOICE_TERMS = [
   'הצעת מחיר',
   'quote',
   'proforma',
-  'statement',
   'דוח',
+  'דוחות',
   'report',
   'תעודת משלוח',
   'delivery note',
 ]
+
+// Bump whenever the veto rules above change — previously vetoed messages are
+// re-opened exactly once under the new rules (see getSettledEmailIds).
+const FILTER_VERSION = 2
 
 interface ProcessResult {
   status: 'created' | 'duplicate' | 'error'
@@ -163,34 +178,60 @@ interface ExtractedInvoice {
   category?: string
 }
 
-function hasAnyTerm(value: string, terms: string[]): boolean {
-  const normalized = value.toLowerCase()
-  return terms.some((term) => normalized.includes(term.toLowerCase()))
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// Returns true ONLY for clear non-invoice signals. We do NOT require a
-// positive match — many legitimate invoices arrive with neutral subjects
-// like "Your monthly statement" or filenames like "INV-12345.pdf" that
-// contain no positive keyword. We let the AI extractor be the truth and
-// only short-circuit when the email/filename obviously says "this is not
-// an invoice" (quote, proforma, delivery note).
-function isObviousNonInvoice(subject: string, sender: string, filename: string): boolean {
+// Word-boundary matching that works for Hebrew (JS \b is ASCII-only): the
+// term must not be immediately adjacent to another letter/digit. Stops 'דוח'
+// from matching inside unrelated longer words.
+function toBoundaryRegex(term: string): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(term.toLowerCase())}(?![\\p{L}\\p{N}])`, 'iu')
+}
+
+const NEGATIVE_TERM_MATCHERS = NEGATIVE_INVOICE_TERMS.map((term) => ({
+  term,
+  re: toBoundaryRegex(term),
+}))
+const POSITIVE_TERM_MATCHERS = POSITIVE_INVOICE_TERMS.map((term) => ({
+  term,
+  re: toBoundaryRegex(term),
+}))
+
+function findTerm(value: string, matchers: { term: string; re: RegExp }[]): string | null {
+  const normalized = value.toLowerCase()
+  for (const { term, re } of matchers) {
+    if (re.test(normalized)) return term
+  }
+  return null
+}
+
+interface NonInvoiceVerdict {
+  skip: boolean
+  reason?: string
+}
+
+// Veto ONLY on clear non-invoice signals. We do NOT require a positive match —
+// many legitimate invoices arrive with neutral subjects like "Your monthly
+// statement" or filenames like "INV-12345.pdf" that contain no positive
+// keyword. We let the AI extractor be the truth and only short-circuit when
+// the email/filename obviously says "this is not an invoice". A positive term
+// ANYWHERE (subject, sender, or filename) overrides every negative — a file
+// named "חשבונית מס 123 (תעודת משלוח).pdf" is an invoice, not a delivery note.
+function isObviousNonInvoice(subject: string, sender: string, filename: string): NonInvoiceVerdict {
   const filenameLower = filename.toLowerCase()
-  if (filenameLower && hasAnyTerm(filenameLower, NEGATIVE_INVOICE_TERMS)) return true
-
   const subjectLower = `${subject} ${sender}`.toLowerCase().trim()
-  if (!subjectLower) return false
-
-  // Subject-level negative is a softer signal — only skip when it's a
-  // negative term AND there is NO positive term anywhere (subject, sender,
-  // or filename). This avoids killing real invoices that happen to share
-  // a thread with a quote.
-  const hasNegativeSubject = hasAnyTerm(subjectLower, NEGATIVE_INVOICE_TERMS)
-  if (!hasNegativeSubject) return false
 
   const haystack = `${subjectLower} ${filenameLower}`
-  const hasPositiveAnywhere = hasAnyTerm(haystack, POSITIVE_INVOICE_TERMS)
-  return !hasPositiveAnywhere
+  if (findTerm(haystack, POSITIVE_TERM_MATCHERS)) return { skip: false }
+
+  const negativeInFilename = filenameLower ? findTerm(filenameLower, NEGATIVE_TERM_MATCHERS) : null
+  if (negativeInFilename) return { skip: true, reason: `negative_keyword:${negativeInFilename}` }
+
+  const negativeInSubject = subjectLower ? findTerm(subjectLower, NEGATIVE_TERM_MATCHERS) : null
+  if (negativeInSubject) return { skip: true, reason: `negative_keyword:${negativeInSubject}` }
+
+  return { skip: false }
 }
 
 function isSupportedInvoiceFile(filename: string): boolean {
@@ -281,7 +322,17 @@ async function processAttachment(
     .from('invoice-files')
     .upload(storagePath, buffer, { contentType })
 
-  if (uploadError) return { status: 'error', filename }
+  if (uploadError) {
+    console.error('[scan-gmail] upload failed:', uploadError, 'file:', filename)
+    return { status: 'error', filename }
+  }
+
+  // The upload happens before extraction — duplicate/error exits must remove
+  // the object or it leaks into the bucket forever (no GC job exists).
+  const removeUploadedObject = async () => {
+    const { error } = await supabase.storage.from('invoice-files').remove([storagePath])
+    if (error) console.error('[scan-gmail] storage cleanup failed:', error, 'path:', storagePath)
+  }
 
   const {
     data: { publicUrl: file_url },
@@ -289,6 +340,7 @@ async function processAttachment(
 
   const isPdf = contentType === 'application/pdf'
 
+  let rowCreated = false
   try {
     const result = await anthropic.messages.create({
       model: INVOICE_EXTRACTION_MODEL,
@@ -375,9 +427,14 @@ async function processAttachment(
       const { data: existing } = await duplicateQuery
 
       if (existing && existing.length > 0) {
+        await removeUploadedObject()
         return { status: 'duplicate', filename, vendor: extracted.vendor }
       }
     }
+
+    // A positively-identified non-invoice (proforma / quote / delivery note)
+    // must never reach the accountant automatically — force review.
+    const nonInvoiceDoc = isNonInvoiceDocType(extracted.doc_type)
 
     const insertPayload: Record<string, unknown> = {
       ...extracted,
@@ -385,9 +442,9 @@ async function processAttachment(
       file_name: filename || `invoice_${Date.now()}.pdf`,
       source: 'gmail',
       created_by: createdBy,
-      needs_review: !validation.ok,
+      needs_review: !validation.ok || nonInvoiceDoc,
       vat_derived: derivation.vatDerived,
-      validation_error: validation.reason,
+      validation_error: nonInvoiceDoc ? NON_INVOICE_REVIEW_MESSAGE : validation.reason,
       extraction_raw: {
         model: INVOICE_EXTRACTION_MODEL,
         raw_text: text,
@@ -419,37 +476,72 @@ async function processAttachment(
     if (insertError) {
       // Unique index (vendor, doc_number, doc_type) — same document re-scanned.
       if (insertError.code === '23505') {
+        await removeUploadedObject()
         return { status: 'duplicate', filename, vendor: extracted.vendor }
       }
       console.error('[scan-gmail] insert failed:', insertError, 'file:', filename)
+      await removeUploadedObject()
       return { status: 'error', filename }
     }
+    rowCreated = true
 
     if (vendor && extracted.category) {
       vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
     }
 
     const needsReview = Boolean(insertPayload.needs_review)
-    sendInvoiceToAccountant({
-      invoiceId: inserted.id,
-      fileUrl: file_url,
-      fileName: filename || null,
-      vendor: extracted.vendor,
-      date: extracted.date,
-      needsReview,
-    }).catch((err) => console.error('[scan-gmail] accountant send error:', err))
+    try {
+      // Awaited: fire-and-forget dropped the send silently when the process
+      // restarted (deploy) mid-scan.
+      await sendInvoiceToAccountant({
+        invoiceId: inserted.id,
+        fileUrl: file_url,
+        fileName: filename || null,
+        vendor: extracted.vendor,
+        date: extracted.date,
+        needsReview,
+      })
+    } catch (err) {
+      console.error('[scan-gmail] accountant send error:', err)
+    }
 
     return { status: 'created', filename, vendor: extracted.vendor }
-  } catch {
+  } catch (err) {
+    console.error('[scan-gmail] extraction failed:', err, 'file:', filename, 'message:', messageId)
+    // Never delete the object once a DB row references it.
+    if (!rowCreated) await removeUploadedObject()
     return { status: 'error', filename }
   }
 }
 
 // ─── Scan State Helpers ───────────────────────────────────
 
-async function getAlreadyScannedIds(): Promise<Set<string>> {
-  const { data } = await supabase.from('scanned_emails').select('email_id')
-  return new Set((data || []).map((r) => r.email_id))
+// Bounded lookup: only the current search results are checked (the old
+// unbounded full-table read silently truncated at PostgREST's 1000-row cap).
+// A message is "settled" — skippable — only when it was fully scanned with
+// nothing vetoed, or was vetoed under the CURRENT filter rules. Errored
+// messages and messages vetoed under older rules are re-opened, so improving
+// the classifier recovers past false vetoes without re-billing extraction for
+// messages that already produced invoices.
+async function getSettledEmailIds(candidateIds: string[]): Promise<Set<string>> {
+  const settled = new Set<string>()
+  const CHUNK = 100
+  for (let i = 0; i < candidateIds.length; i += CHUNK) {
+    const chunk = candidateIds.slice(i, i + CHUNK)
+    const { data } = await supabase
+      .from('scanned_emails')
+      .select('email_id, scan_status, filter_version, skipped_attachments')
+      .in('email_id', chunk)
+    for (const row of data || []) {
+      if (row.scan_status === 'error') continue // always retry errors
+      const hadVetoes =
+        row.scan_status === 'no_attachments' ||
+        (Array.isArray(row.skipped_attachments) && row.skipped_attachments.length > 0)
+      if (hadVetoes && (row.filter_version ?? 0) < FILTER_VERSION) continue
+      settled.add(row.email_id)
+    }
+  }
+  return settled
 }
 
 async function getScanState() {
@@ -461,6 +553,11 @@ async function getScanState() {
   return data
 }
 
+interface SkippedAttachment {
+  filename: string
+  reason: string
+}
+
 async function recordScannedEmail(
   emailId: string,
   emailDate: string | null,
@@ -468,7 +565,8 @@ async function recordScannedEmail(
   subject: string,
   attachmentNames: string[],
   invoicesFound: number,
-  scanStatus: 'scanned' | 'no_attachments' | 'error'
+  scanStatus: 'scanned' | 'no_attachments' | 'error',
+  skippedAttachments: SkippedAttachment[] = []
 ) {
   await supabase.from('scanned_emails').upsert({
     email_id: emailId,
@@ -479,25 +577,19 @@ async function recordScannedEmail(
     invoices_found: invoicesFound,
     scan_status: scanStatus,
     scanned_at: new Date().toISOString(),
+    skipped_attachments: skippedAttachments,
+    filter_version: FILTER_VERSION,
   })
 }
 
 async function updateScanState(scannedCount: number, invoicesCount: number) {
-  // Get current totals
-  const { data: current } = await supabase
-    .from('gmail_tokens')
-    .select('total_scanned_messages, total_found_invoices')
-    .eq('id', 'default')
-    .single()
-
-  await supabase
-    .from('gmail_tokens')
-    .update({
-      last_scan_completed_at: new Date().toISOString(),
-      total_scanned_messages: (current?.total_scanned_messages || 0) + scannedCount,
-      total_found_invoices: (current?.total_found_invoices || 0) + invoicesCount,
-    })
-    .eq('id', 'default')
+  // Atomic SQL increment — the old read-then-write lost counts when two scans
+  // overlapped (cron + manual).
+  const { error } = await supabase.rpc('increment_scan_totals', {
+    p_scanned: scannedCount,
+    p_found: invoicesCount,
+  })
+  if (error) console.error('[scan-gmail] increment_scan_totals failed:', error)
 }
 
 // ─── Auth ─────────────────────────────────────────────────
@@ -544,7 +636,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const requestedMax = Number(body.maxMessages)
   const maxMessages = Number.isFinite(requestedMax)
-    ? Math.min(Math.max(Math.floor(requestedMax), 1), 200)
+    ? Math.min(Math.max(Math.floor(requestedMax), 1), 500)
     : 50
   const mode: 'quick' | 'full' = body.mode || 'quick'
   const allowRescan = Boolean(body.allowRescan)
@@ -580,29 +672,41 @@ export async function POST(request: NextRequest) {
     const authHeader = { Authorization: `Bearer ${accessToken}` }
     const vendorCategoryMemory = await loadVendorCategoryMemory()
     const scanState = await getScanState()
-    const alreadyScanned = allowRescan ? new Set<string>() : await getAlreadyScannedIds()
 
     const incrementalAfter = mode === 'full' ? '' : toGmailAfterQuery(scanState?.last_scan_completed_at)
+    // -in:spam -in:trash (not in:inbox): archived and label-filtered vendor
+    // mail must still be scanned; the keyword filter + doc_type gate contain
+    // the extra noise.
     const queryParts = [
-      'in:inbox',
+      '-in:spam -in:trash',
       'has:attachment',
       '(filename:pdf OR filename:jpg OR filename:jpeg OR filename:png OR filename:webp)',
       incrementalAfter,
     ].filter(Boolean)
     const gmailQuery = queryParts.join(' ')
 
-    const searchRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${maxMessages}`,
-      { headers: authHeader, signal: AbortSignal.timeout(20000) }
-    )
+    // Paginated search — a single page capped "full scan" at 200 messages.
+    const allMessages: { id: string }[] = []
+    let pageToken: string | undefined
+    do {
+      const pageSize = Math.min(100, maxMessages - allMessages.length)
+      const pageParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
+      const searchRes = await fetchWithRetry(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${pageSize}${pageParam}`,
+        { headers: authHeader }
+      )
+      if (!searchRes.ok) {
+        const errText = await searchRes.text()
+        throw new Error(`Gmail API error: ${errText}`)
+      }
+      const searchData = await searchRes.json()
+      allMessages.push(...((searchData.messages || []) as { id: string }[]))
+      pageToken = searchData.nextPageToken
+    } while (pageToken && allMessages.length < maxMessages)
 
-    if (!searchRes.ok) {
-      const errText = await searchRes.text()
-      throw new Error(`Gmail API error: ${errText}`)
-    }
-
-    const searchData = await searchRes.json()
-    const allMessages: { id: string }[] = searchData.messages || []
+    const alreadyScanned = allowRescan
+      ? new Set<string>()
+      : await getSettledEmailIds(allMessages.map((m) => m.id))
     const skippedAlreadyScanned = allMessages.filter((m) => alreadyScanned.has(m.id)).length
     const newMessages = allMessages.filter((m) => !alreadyScanned.has(m.id))
 
@@ -612,6 +716,8 @@ export async function POST(request: NextRequest) {
 
     if (newMessages.length === 0) {
       await updateScanState(0, 0)
+      // Safety net: retry anything left unsent by previous runs/crashes.
+      const drained = await drainUnsentToAccountant()
       return {
         status: 'ok' as const,
         mode,
@@ -623,21 +729,40 @@ export async function POST(request: NextRequest) {
         totalChecked: allMessages.length,
         newChecked: 0,
         details: [],
+        drained,
         lastScanAt: new Date().toISOString(),
       }
     }
 
-    const msgResults = await Promise.all(
-      newMessages.map(({ id: msgId }) =>
-        fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`,
-          { headers: authHeader, signal: AbortSignal.timeout(20000) }
-        ).then((r) => (r.ok ? r.json() : null))
+    // Batches of 5 (like attachments): Gmail's quota is 250 units/user/sec
+    // and messages.get costs 5 — an unbounded fan-out over 200+ messages
+    // guaranteed 429s.
+    interface GmailMessageDetail {
+      id: string
+      payload?: GmailPart
+    }
+    const msgResults: (GmailMessageDetail | null)[] = []
+    const MSG_BATCH = 5
+    for (let i = 0; i < newMessages.length; i += MSG_BATCH) {
+      const batch = newMessages.slice(i, i + MSG_BATCH)
+      const results = await Promise.all(
+        batch.map(({ id: msgId }) =>
+          fetchWithRetry(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`,
+            { headers: authHeader }
+          )
+            .then((r) => (r.ok ? (r.json() as Promise<GmailMessageDetail>) : null))
+            .catch(() => null)
+        )
       )
-    )
+      msgResults.push(...results)
+    }
 
     progress.phase = 'prepare_attachments'
     const attachmentJobs: AttachmentJob[] = []
+    // Per-message veto log — persisted to scanned_emails.skipped_attachments
+    // so rejections are auditable and replayable when the filter improves.
+    const skipMap = new Map<string, SkippedAttachment[]>()
     let skipped = 0
 
     for (const msg of msgResults) {
@@ -655,25 +780,38 @@ export async function POST(request: NextRequest) {
       const emailDate = dateStr ? new Date(dateStr).toISOString() : null
 
       const candidateParts = collectAttachmentParts(msg.payload || {})
-      const attachmentNames: string[] = []
+      const skippedParts: SkippedAttachment[] = []
       let foundAttachment = false
 
       for (const part of candidateParts) {
         const filename = part.filename || ''
-        const hasSupportedFile = isSupportedInvoiceFile(filename)
-        if (!hasSupportedFile) continue
-        if ((part.body?.size || 0) > MAX_FILE_SIZE) continue
-        if (isInlineDecorativeImage(part)) continue
-        if (isObviousNonInvoice(subject, sender, filename)) continue
+        if (!isSupportedInvoiceFile(filename)) {
+          skippedParts.push({ filename, reason: 'unsupported_type' })
+          continue
+        }
+        if ((part.body?.size || 0) > MAX_FILE_SIZE) {
+          skippedParts.push({ filename, reason: 'too_large' })
+          continue
+        }
+        if (isInlineDecorativeImage(part)) {
+          skippedParts.push({ filename, reason: 'inline_image' })
+          continue
+        }
+        const verdict = isObviousNonInvoice(subject, sender, filename)
+        if (verdict.skip) {
+          skippedParts.push({ filename, reason: verdict.reason || 'negative_keyword' })
+          continue
+        }
 
         foundAttachment = true
-        attachmentNames.push(part.filename || 'unknown')
         attachmentJobs.push({ msgId: msg.id, part, sender, subject, emailDate })
       }
 
       if (!foundAttachment) {
         skipped++
-        await recordScannedEmail(msg.id, emailDate, sender, subject, [], 0, 'no_attachments')
+        await recordScannedEmail(msg.id, emailDate, sender, subject, [], 0, 'no_attachments', skippedParts)
+      } else if (skippedParts.length > 0) {
+        skipMap.set(msg.id, skippedParts)
       }
     }
 
@@ -748,7 +886,8 @@ export async function POST(request: NextRequest) {
         summary.subject,
         summary.names,
         summary.found,
-        summary.anyError ? 'error' : 'scanned'
+        summary.anyError ? 'error' : 'scanned',
+        skipMap.get(msgId) || []
       )
     }
 
@@ -772,6 +911,8 @@ export async function POST(request: NextRequest) {
     }
 
     await updateScanState(newMessages.length, created)
+    // Safety net: retry anything left unsent by previous runs/crashes.
+    const drained = await drainUnsentToAccountant()
 
     return {
       status: 'ok' as const,
@@ -784,25 +925,37 @@ export async function POST(request: NextRequest) {
       totalChecked: allMessages.length,
       newChecked: newMessages.length,
       details,
+      drained,
       lastScanAt: new Date().toISOString(),
     }
   }
+
+  // Reject overlapping scans (cron 02:30 vs a manual click, or two tabs) —
+  // they double-fetch Gmail and double-bill extraction.
+  if (activeScan) {
+    return NextResponse.json({ status: 'error', message: 'סריקה כבר פועלת' }, { status: 409 })
+  }
+  activeScan = true
 
   if (!streamProgress) {
     try {
       const result = await runScan()
       if (isCronRun) {
         console.info(
-          '[scan-gmail] auto-scan completed: created=%d duplicates=%d errors=%d',
+          '[scan-gmail] auto-scan completed: created=%d duplicates=%d errors=%d drained=%d/%d',
           result.created,
           result.duplicates,
-          result.errors
+          result.errors,
+          result.drained?.sent ?? 0,
+          result.drained?.attempted ?? 0
         )
       }
       return NextResponse.json(result)
     } catch (err) {
       console.error('[scan-gmail] error:', err)
       return NextResponse.json({ status: 'error', message: 'סריקת המייל נכשלה' })
+    } finally {
+      activeScan = false
     }
   }
 
@@ -822,6 +975,7 @@ export async function POST(request: NextRequest) {
         const message = err instanceof Error ? err.message : 'Unknown error'
         send({ type: 'error', message })
       } finally {
+        activeScan = false
         controller.close()
       }
     },

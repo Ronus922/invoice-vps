@@ -49,8 +49,11 @@ export async function POST(request: NextRequest) {
 
     // Idempotency: a double click / second tab must not email the accountant
     // twice for the same invoice.
+    // Contract: 200 + sent:true = delivered; 200 + sent:false + reason = genuine
+    // skip (recorded in accountant_send_error); non-200 = hard failure. Callers
+    // must check `sent`, not just res.ok.
     if (alreadySentAt) {
-      return NextResponse.json({ skipped: true, reason: 'already_sent' })
+      return NextResponse.json({ sent: true, skipped: true, reason: 'already_sent' })
     }
 
     const result = await sendInvoiceToAccountant({
@@ -62,11 +65,8 @@ export async function POST(request: NextRequest) {
       needsReview,
     })
 
-    if (!result.sent && result.reason === 'needs_review') {
-      return NextResponse.json({ skipped: true, reason: 'needs_review' })
-    }
     if (!result.sent && result.reason) {
-      return NextResponse.json({ skipped: true, reason: result.reason })
+      return NextResponse.json({ sent: false, skipped: true, reason: result.reason })
     }
     if (!result.sent) {
       return NextResponse.json({ sent: false, error: result.error }, { status: 500 })

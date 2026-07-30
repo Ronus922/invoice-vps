@@ -120,6 +120,10 @@ export default function FolderWatchSettings({ onClose, onScanned }: FolderWatchS
     try {
       const invoices = await InvoiceEntity.list('-created_at')
       const result = await runFolderScan(handle, invoices, (snap) => setProgress({ ...snap }))
+      if (!result) {
+        setError('סריקה אחרת כבר פועלת (בלשונית או חלון אחר) — נסה שוב בעוד רגע')
+        return
+      }
       setLastResult(result)
       onScanned()
       refetchState()

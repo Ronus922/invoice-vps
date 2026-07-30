@@ -138,23 +138,9 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           }
           onInvoiceExtracted()
 
-          const needsReview = Boolean(extracted.needs_review)
-          if (!needsReview) {
-            // Fire-and-forget: send to accountant only when arithmetic checks out.
-            fetch('/api/send-to-accountant', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                file_url: fileUrl,
-                vendor: extracted.vendor || '',
-                date: extracted.date || '',
-              }),
-            })
-              .then((sendRes) => {
-                if (!sendRes.ok) console.error('[upload] accountant send failed:', sendRes.status)
-              })
-              .catch((sendErr) => console.error('[upload] accountant send failed:', sendErr))
-          }
+          // Server-computed flag — may differ from `extracted` (e.g. a
+          // non-invoice doc_type forces review on insert).
+          const needsReview = Boolean(created.needs_review)
           setQueue((prev) =>
             prev.map((q) =>
               q === item || (q.name === item.name && q.status === 'processing')
@@ -162,12 +148,48 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
                     ...q,
                     status: 'done',
                     message: needsReview
-                      ? `נדרשת בדיקת סכומים — לא נשלח לרו"ח`
+                      ? `${created.validation_error || 'נדרשת בדיקת סכומים'} — לא נשלח לרו"ח`
                       : extracted.vendor || '',
                   }
                 : q
             )
           )
+
+          if (!needsReview) {
+            // Awaited: the fire-and-forget version resolved after the refresh,
+            // so sent rows stayed painted as unsent until a manual click.
+            try {
+              const sendRes = await fetch('/api/send-to-accountant', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  invoice_id: created.id,
+                  file_url: fileUrl,
+                  vendor: extracted.vendor || '',
+                  date: extracted.date || '',
+                }),
+              })
+              const sendData = await sendRes.json().catch(() => null)
+              if (!sendRes.ok || sendData?.sent !== true) {
+                console.error(
+                  '[upload] accountant send not sent:',
+                  sendData?.reason || sendData?.error || sendRes.status
+                )
+                setQueue((prev) =>
+                  prev.map((q) =>
+                    q.name === item.name && q.status === 'done'
+                      ? { ...q, message: `${extracted.vendor || ''} — לא נשלח לרו"ח`.trim() }
+                      : q
+                  )
+                )
+              }
+            } catch (sendErr) {
+              console.error('[upload] accountant send failed:', sendErr)
+            }
+            // Second refresh now that the send outcome is recorded in the DB —
+            // this is what flips the row green without a manual click.
+            onInvoiceExtracted()
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'שגיאה לא ידועה'
           setQueue((prev) =>

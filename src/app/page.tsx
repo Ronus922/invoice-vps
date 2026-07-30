@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   LayoutGrid,
@@ -121,30 +121,15 @@ export default function InvoicesPage() {
     })
   }, [])
 
-  // Realtime: auto-refresh when invoices change on any device
-  useEffect(() => {
-    const supabase = createClient()
-    const channel = supabase
-      .channel('invoices-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'invoices' },
-        () => refresh()
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   // Auto-scan watched folder while the page is open. Silent if permission
   // is not granted — re-grant requires the user to click in the dialog.
-  const lastFolderScanAttempt = useRef<number>(0)
+  // Throttle lives in localStorage — a useRef reset on every reload used to
+  // re-trigger a scan per page load, overlapping the manual dialog scan.
   useEffect(() => {
     if (!isFolderWatchSupported()) return
 
     const TWELVE_HOURS = 12 * 60 * 60 * 1000
+    const LAST_AUTO_SCAN_KEY = 'folder-watch-last-auto-scan'
 
     const attempt = async () => {
       try {
@@ -152,12 +137,24 @@ export default function InvoicesPage() {
         if (!handle) return
         const perm = await handle.queryPermission({ mode: 'readwrite' })
         if (perm !== 'granted') return
+        let last = 0
+        try {
+          last = Number(window.localStorage.getItem(LAST_AUTO_SCAN_KEY) || 0)
+        } catch {
+          /* private mode */
+        }
         const now = Date.now()
-        if (now - lastFolderScanAttempt.current < TWELVE_HOURS) return
-        lastFolderScanAttempt.current = now
+        if (now - last < TWELVE_HOURS) return
+        // Mark the attempt (not the success) — prevents hot retry loops.
+        try {
+          window.localStorage.setItem(LAST_AUTO_SCAN_KEY, String(now))
+        } catch {
+          /* non-fatal */
+        }
 
         const list = await InvoiceEntity.list('-created_at')
         const result = await runFolderScan(handle, list)
+        if (!result) return // another tab/scan holds the lock
         if (result.created > 0) {
           refresh()
         } else {
