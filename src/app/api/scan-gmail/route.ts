@@ -879,7 +879,9 @@ export async function POST(request: NextRequest) {
         }
         summary.names.push(job.part.filename || 'unknown')
         if (result?.status === 'created') summary.found += 1
-        if (!result) summary.anyError = true
+        // A failed attachment must mark the whole message 'error' — that
+        // status is what re-opens it on the next scan (getSettledEmailIds).
+        if (!result || result.status === 'error') summary.anyError = true
         emailSummaries.set(job.msgId, summary)
       }
     }
