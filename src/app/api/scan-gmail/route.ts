@@ -467,6 +467,12 @@ async function processAttachment(
     // instead of losing the invoice on an insert failure.
     coerceRequiredIdentityFields(insertPayload)
 
+    // DB has NOT NULL on total. Mirror /api/invoices POST: a failed extraction
+    // (total=null) still saves the file, flagged by the total<=0 validator —
+    // otherwise the insert 23502s and the message retries (and re-bills) on
+    // every scan forever.
+    if (insertPayload.total == null) insertPayload.total = 0
+
     const { data: inserted, error: insertError } = await supabase
       .from('invoices')
       .insert(insertPayload)
