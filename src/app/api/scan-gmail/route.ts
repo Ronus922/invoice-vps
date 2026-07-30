@@ -682,9 +682,11 @@ export async function POST(request: NextRequest) {
     const incrementalAfter = mode === 'full' ? '' : toGmailAfterQuery(scanState?.last_scan_completed_at)
     // -in:spam -in:trash (not in:inbox): archived and label-filtered vendor
     // mail must still be scanned; the keyword filter + doc_type gate contain
-    // the extra noise.
+    // the extra noise. -in:sent is CRITICAL: the accountant-send emails this
+    // app sends carry the invoice PDFs — without it every sent invoice
+    // re-enters the scan window and re-bills an extraction.
     const queryParts = [
-      '-in:spam -in:trash',
+      '-in:spam -in:trash -in:sent',
       'has:attachment',
       '(filename:pdf OR filename:jpg OR filename:jpeg OR filename:png OR filename:webp)',
       incrementalAfter,
