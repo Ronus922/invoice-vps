@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Eye, Loader2, Pencil, Trash2 } from 'lucide-react'
 import EditInvoiceDialog from './EditInvoiceDialog'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
+import { fileHref } from '@/lib/file-url'
+import { formatCurrency } from '@/lib/format'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -36,6 +38,18 @@ function getMissingFields(inv: Invoice) {
   return CRITICAL_FIELDS.filter((f) => !inv[f.key] && inv[f.key] !== 0).map((f) => f.label)
 }
 
+function isNonInvoiceFlagged(inv: Invoice) {
+  return inv.validation_error === NON_INVOICE_REVIEW_MESSAGE
+}
+
+// Triage order: AI-flagged non-invoices WITH an amount first (most likely
+// misclassified real invoices → quick-confirm), then amount-less flagged ones
+// (most likely genuine junk → delete), then everything else.
+function triageRank(inv: Invoice) {
+  if (isNonInvoiceFlagged(inv)) return inv.total > 0 ? 0 : 1
+  return 2
+}
+
 interface IncompleteInvoicesAlertProps {
   invoices: Invoice[]
   onRefresh: () => void
@@ -53,12 +67,45 @@ export default function IncompleteInvoicesAlert({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [bulkConfirming, setBulkConfirming] = useState(false)
 
-  const incomplete = invoices.filter(
-    (inv) =>
-      inv.needs_review || (looksLikeInvoice(inv) && getMissingFields(inv).length > 0)
-  )
+  const incomplete = invoices
+    .filter(
+      (inv) =>
+        inv.needs_review || (looksLikeInvoice(inv) && getMissingFields(inv).length > 0)
+    )
+    .sort((a, b) => triageRank(a) - triageRank(b))
   const allSelected = incomplete.length > 0 && selected.size === incomplete.length
+  const selectedNonInvoice = incomplete.filter(
+    (inv) => selected.has(inv.id) && isNonInvoiceFlagged(inv)
+  )
+
+  // "This IS an invoice": doc_type 'other' → 'unknown' releases the
+  // non-invoice gate; the server recomputes needs_review, so a row with valid
+  // amounts leaves this list and is picked up for sending automatically.
+  const handleConfirmInvoice = async (inv: Invoice) => {
+    setConfirmingId(inv.id)
+    try {
+      await InvoiceEntity.update(inv.id, { doc_type: 'unknown' })
+      onRefresh()
+    } finally {
+      setConfirmingId(null)
+    }
+  }
+
+  const handleBulkConfirm = async () => {
+    setBulkConfirming(true)
+    try {
+      for (const inv of selectedNonInvoice) {
+        await InvoiceEntity.update(inv.id, { doc_type: 'unknown' })
+      }
+      setSelected(new Set())
+      onRefresh()
+    } finally {
+      setBulkConfirming(false)
+    }
+  }
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -121,6 +168,20 @@ export default function IncompleteInvoicesAlert({
             )}
           </button>
 
+          {selectedNonInvoice.length > 0 && (
+            <button
+              onClick={handleBulkConfirm}
+              disabled={bulkConfirming}
+              className="flex items-center gap-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 disabled:opacity-50 text-xs font-medium px-3 py-1.5 rounded-lg transition-all mr-2"
+            >
+              {bulkConfirming ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Check className="w-3.5 h-3.5" />
+              )}
+              אשר {selectedNonInvoice.length} כחשבוניות
+            </button>
+          )}
           {selected.size > 0 && (
             <button
               onClick={() => setConfirmBulkDelete(true)}
@@ -179,6 +240,11 @@ export default function IncompleteInvoicesAlert({
                             {issueLine}
                           </p>
                         )}
+                        <p className="text-[11px] text-white/40 mt-0.5 truncate" dir="rtl">
+                          {inv.total > 0 ? formatCurrency(inv.total, inv.currency) : 'ללא סכום'}
+                          {inv.date ? ` · ${inv.date}` : ''}
+                          {inv.file_name ? ` · ${inv.file_name}` : ''}
+                        </p>
                       </div>
                       {reviewIssue &&
                         (inv.validation_error === NON_INVOICE_REVIEW_MESSAGE ? (
@@ -197,6 +263,33 @@ export default function IncompleteInvoicesAlert({
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 mr-2">
+                      {inv.file_url && (
+                        <a
+                          href={fileHref(inv.file_url)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="צפה במסמך"
+                          className="flex items-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 hover:text-white text-xs font-medium px-3 py-2 rounded-lg transition-all min-h-[44px]"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">צפה</span>
+                        </a>
+                      )}
+                      {isNonInvoiceFlagged(inv) && (
+                        <button
+                          onClick={() => handleConfirmInvoice(inv)}
+                          disabled={confirmingId === inv.id}
+                          title="סווג מחדש כחשבונית — ישוחרר לשליחה לרו״ח"
+                          className="flex items-center gap-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 disabled:opacity-50 text-xs font-medium px-3 py-2 rounded-lg transition-all min-h-[44px]"
+                        >
+                          {confirmingId === inv.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5" />
+                          )}
+                          <span className="hidden sm:inline">זו חשבונית</span>
+                        </button>
+                      )}
                       <button
                         onClick={() => setEditingInvoice(inv)}
                         className="flex items-center gap-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-medium px-3 py-2 rounded-lg transition-all min-h-[44px]"
