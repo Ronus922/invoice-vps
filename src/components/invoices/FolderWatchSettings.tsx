@@ -6,10 +6,11 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
-  FolderCog,
+  FolderUp,
   FolderOpen,
   Play,
   Unplug,
+  Info,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -23,6 +24,16 @@ import {
   type FolderScanResult,
 } from '@/lib/folder-watch'
 import { InvoiceEntity } from '@/lib/entities'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 interface FolderWatchSettingsProps {
   onClose: () => void
@@ -55,6 +66,7 @@ export default function FolderWatchSettings({ onClose, onScanned }: FolderWatchS
   const [progress, setProgress] = useState<FolderScanProgress | null>(null)
   const [lastResult, setLastResult] = useState<FolderScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const scanInFlight = useRef(false)
 
   const { data: state, refetch: refetchState } = useQuery<ScanStateResponse>({
@@ -135,214 +147,258 @@ export default function FolderWatchSettings({ onClose, onScanned }: FolderWatchS
     }
   }, [handle, onScanned, refetchState])
 
+  const hasFolder = !!handle
+
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-md bg-gradient-to-b from-slate-800 to-slate-900 border border-white/10 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto"
+        className="relative w-full max-w-[460px] bg-[#0e1f3d] border border-[rgba(126,152,210,0.22)] rounded-[20px] shadow-[0_32px_80px_rgba(4,10,26,0.65)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         dir="rtl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between gap-3 px-[26px] pt-6 pb-0">
           <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-violet-500/30 to-purple-600/20 border border-violet-400/30 p-2.5 rounded-xl">
-              <FolderCog className="w-5 h-5 text-violet-300" />
+            <div className="w-12 h-12 flex-shrink-0 rounded-[14px] bg-[rgba(45,212,191,0.12)] border border-[rgba(45,212,191,0.25)] flex items-center justify-center">
+              <FolderUp className="w-5 h-5 text-[#2dd4bf]" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">סריקת תיקייה</h3>
-              <p className="text-xs text-white/40">שמור תיקייה במחשב ועבד חשבוניות אוטומטית</p>
+              <h3 className="text-[19px] font-extrabold text-[#f4f7fd]">סריקת תיקייה</h3>
+              <p className="text-[13.5px] text-[#8fb0e8]">שמור תיקייה במחשב ועבד חשבוניות אוטומטית</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+            aria-label="סגירה"
+            className="w-9 h-9 flex-shrink-0 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Body */}
-        {!supported ? (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
-              <div className="text-sm text-amber-200 leading-relaxed">
-                <p className="font-medium mb-1">תכונה זו דורשת Chrome או Edge על מחשב</p>
-                <p className="text-xs text-amber-200/80">
-                  Safari, Firefox ומכשירי iOS לא תומכים בגישה ישירה לתיקיות מהדפדפן.
-                  בקש מהמערכת לסרוק את המייל אוטומטית — זה רץ בצד השרת ולא דורש דפדפן.
-                </p>
+        <div className="px-[26px] pb-6 pt-5">
+          {!supported ? (
+            <div className="rounded-[13px] border border-amber-500/30 bg-amber-500/10 p-4">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+                <div className="text-sm text-amber-200 leading-relaxed">
+                  <p className="font-medium mb-1">תכונה זו דורשת Chrome או Edge על מחשב</p>
+                  <p className="text-xs text-amber-200/80">
+                    Safari, Firefox ומכשירי iOS לא תומכים בגישה ישירה לתיקיות מהדפדפן.
+                    בקש מהמערכת לסרוק את המייל אוטומטית — זה רץ בצד השרת ולא דורש דפדפן.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        ) : loadingHandle ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 text-white/40 animate-spin" />
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Folder picker */}
-            {!handle ? (
-              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                <p className="text-sm text-white/70 mb-3 leading-relaxed">
-                  בחר תיקייה במחשב. כל קובץ PDF/תמונה שייכנס לתיקייה יעובד אוטומטית
-                  ויוסר מהתיקייה אחרי העלאה מוצלחת.
-                </p>
+          ) : loadingHandle ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 text-[#8fb0e8] animate-spin" />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {/* Folder-tracked card */}
+              <div className="rounded-[13px] bg-[rgba(126,152,210,0.06)] border border-[rgba(126,152,210,0.14)] px-4 py-3.5 flex items-center gap-3">
+                <span
+                  className="w-[9px] h-[9px] rounded-full flex-shrink-0"
+                  style={{
+                    background: hasFolder ? '#2dd4bf' : '#5d729c',
+                    boxShadow: hasFolder ? '0 0 8px rgba(45,212,191,0.7)' : 'none',
+                  }}
+                />
+                <div className="flex-1 min-w-0 text-right">
+                  <p className="text-[15px] font-bold text-[#f4f7fd] truncate">
+                    {hasFolder ? handle.name : 'לא נבחרה תיקייה'}
+                  </p>
+                  <p className="text-[12.5px] text-[#7e97c4] mt-0.5">
+                    {hasFolder ? 'תיקייה במעקב' : 'בחר תיקייה כדי להתחיל'}
+                  </p>
+                </div>
+                <div className="w-[38px] h-[38px] flex-shrink-0 rounded-[11px] bg-[rgba(126,152,210,0.1)] flex items-center justify-center">
+                  <FolderOpen className="w-[18px] h-[18px] text-[#8fb0e8]" />
+                </div>
+              </div>
+
+              {!hasFolder && (
                 <button
                   onClick={handlePickFolder}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-300 rounded-xl font-medium text-sm transition-all min-h-[44px]"
+                  className="w-full h-11 flex items-center justify-center gap-2 rounded-[12px] bg-[#2dd4bf] hover:brightness-110 text-[#0b1830] text-sm font-bold transition-[filter]"
                 >
                   <FolderOpen className="w-4 h-4" />
                   בחר תיקייה
                 </button>
+              )}
+
+              {/* Data cards */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-[13px] bg-[rgba(126,152,210,0.06)] border border-[rgba(126,152,210,0.14)] px-4 py-3">
+                  <p className="text-xs text-[#7e97c4]">סריקה אחרונה</p>
+                  <p className="text-[15px] font-bold text-[#f4f7fd] mt-1" dir="ltr">
+                    {formatDateTime(state?.lastScanAt ?? null)}
+                  </p>
+                </div>
+                <div className="rounded-[13px] bg-[rgba(126,152,210,0.06)] border border-[rgba(126,152,210,0.14)] px-4 py-3">
+                  <p className="text-xs text-[#7e97c4]">חשבוניות בסריקה אחרונה</p>
+                  <p className="text-[17px] font-extrabold text-[#2dd4bf] mt-1" dir="ltr">
+                    {state?.lastScanCount ?? 0}
+                  </p>
+                </div>
               </div>
-            ) : (
-              <>
-                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <FolderOpen className="w-4 h-4 text-violet-300 shrink-0" />
-                    <p className="text-sm font-medium text-white truncate">{handle.name}</p>
-                  </div>
-                  <p className="text-[11px] text-white/40">תיקייה במעקב</p>
-                </div>
 
-                {/* Status */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-white/5 border border-white/10 rounded-lg p-2.5 text-center">
-                    <p className="text-[10px] text-white/40">סריקה אחרונה</p>
-                    <p className="text-[11px] font-medium text-white/80 mt-0.5">
-                      {formatDateTime(state?.lastScanAt ?? null)}
+              {/* Progress (during scan) */}
+              {scanning && progress && (
+                <div className="rounded-[13px] bg-[rgba(45,212,191,0.05)] border border-[rgba(45,212,191,0.18)] px-4 py-3.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="inline-block w-4 h-4 rounded-full animate-spin"
+                      style={{
+                        border: '2px solid rgba(45,212,191,0.25)',
+                        borderTopColor: '#2dd4bf',
+                        animationDuration: '0.9s',
+                      }}
+                    />
+                    <p className="text-sm font-medium text-[#f4f7fd]">
+                      מעבד {progress.processed} / {progress.total}
                     </p>
                   </div>
-                  <div className="bg-white/5 border border-white/10 rounded-lg p-2.5 text-center">
-                    <p className="text-[10px] text-white/40">חשבוניות בסריקה אחרונה</p>
-                    <p className="text-xs font-bold text-emerald-400 mt-0.5">
-                      {state?.lastScanCount ?? 0}
+                  {progress.currentFile && (
+                    <p className="text-xs text-[#7e97c4] truncate mt-1.5" dir="ltr">
+                      {progress.currentFile}
                     </p>
+                  )}
+                  {progress.total > 0 && (
+                    <div className="w-full h-[7px] rounded-full bg-[rgba(126,152,210,0.15)] overflow-hidden mt-2.5">
+                      <div
+                        className="h-full rounded-full transition-[width] duration-300"
+                        style={{
+                          width: `${Math.round((progress.processed / Math.max(progress.total, 1)) * 100)}%`,
+                          background: 'linear-gradient(90deg, #2dd4bf, #5eead4)',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Last result summary */}
+              {!scanning && lastResult && (
+                <div className="rounded-[13px] bg-[rgba(45,212,191,0.05)] border border-[rgba(45,212,191,0.18)] px-4 py-3.5 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#2dd4bf] shrink-0 mt-0.5" />
+                  <div className="text-sm text-[#f4f7fd]">
+                    <p className="font-medium">
+                      הסריקה הסתיימה — {lastResult.created} נוצרו
+                      {lastResult.duplicates > 0 ? ` · ${lastResult.duplicates} כפולות` : ''}
+                      {lastResult.errors > 0 ? ` · ${lastResult.errors} שגיאות` : ''}
+                    </p>
+                    {lastResult.total === 0 && (
+                      <p className="text-xs text-[#8fb0e8] mt-1">לא נמצאו קבצים חדשים</p>
+                    )}
                   </div>
                 </div>
+              )}
 
-                {/* Progress (during scan) */}
-                {scanning && progress && (
-                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Loader2 className="w-4 h-4 text-blue-300 animate-spin" />
-                      <p className="text-sm text-blue-200 font-medium">
-                        מעבד {progress.processed} / {progress.total}
-                      </p>
-                    </div>
-                    {progress.currentFile && (
-                      <p className="text-[11px] text-blue-200/70 truncate">{progress.currentFile}</p>
-                    )}
-                    {progress.total > 0 && (
-                      <div className="w-full bg-white/10 rounded-full h-1 mt-2 overflow-hidden">
-                        <div
-                          className="h-full bg-blue-400 transition-all"
-                          style={{
-                            width: `${Math.round((progress.processed / Math.max(progress.total, 1)) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Last result summary */}
-                {!scanning && lastResult && (
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5" />
-                      <div className="text-sm text-emerald-100">
-                        <p className="font-medium">
-                          הסריקה הסתיימה — {lastResult.created} נוצרו
-                          {lastResult.duplicates > 0 ? ` · ${lastResult.duplicates} כפולות` : ''}
-                          {lastResult.errors > 0 ? ` · ${lastResult.errors} שגיאות` : ''}
-                        </p>
-                        {lastResult.total === 0 && (
-                          <p className="text-xs text-emerald-100/70 mt-1">לא נמצאו קבצים חדשים</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Last persistent error */}
-                {state?.lastError && !scanning && (
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                    <p className="text-[11px] text-red-300 break-words">{state.lastError}</p>
-                  </div>
-                )}
-
-                {/* Error from current run */}
-                {error && (
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                    <p className="text-[11px] text-red-300 break-words">{error}</p>
-                  </div>
-                )}
-
-                {/* Detailed errors from last result */}
-                {!scanning && lastResult && lastResult.errorMessages.length > 0 && (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
-                    <p className="text-[11px] text-amber-200 font-medium mb-2">פרטי שגיאות:</p>
-                    <ul className="text-[11px] text-amber-200/80 space-y-1 list-disc pr-4">
-                      {lastResult.errorMessages.slice(0, 5).map((msg, idx) => (
-                        <li key={idx} className="break-words">{msg}</li>
-                      ))}
-                      {lastResult.errorMessages.length > 5 && (
-                        <li>ועוד {lastResult.errorMessages.length - 5}...</li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleScan}
-                    disabled={scanning}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-300 rounded-xl font-medium text-sm transition-all disabled:opacity-50 min-h-[44px]"
-                  >
-                    {scanning ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        סורק...
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-4 h-4" />
-                        סרוק כעת
-                      </>
-                    )}
-                  </button>
-                  <button
-                    onClick={handlePickFolder}
-                    disabled={scanning}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 rounded-xl font-medium text-sm transition-all disabled:opacity-50 min-w-[44px] min-h-[44px]"
-                    title="בחר תיקייה אחרת"
-                  >
-                    <FolderOpen className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleDisconnect}
-                    disabled={scanning}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/30 text-white/50 hover:text-red-300 rounded-xl font-medium text-sm transition-all disabled:opacity-50 min-w-[44px] min-h-[44px]"
-                    title="ניתוק"
-                  >
-                    <Unplug className="w-4 h-4" />
-                  </button>
+              {/* Last persistent error */}
+              {state?.lastError && !scanning && (
+                <div className="rounded-[13px] bg-[rgba(244,113,113,0.08)] border border-[rgba(244,113,113,0.3)] px-4 py-3.5 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-300 break-words">{state.lastError}</p>
                 </div>
+              )}
 
-                <p className="text-[11px] text-white/30 text-center leading-relaxed">
+              {/* Error from current run */}
+              {error && (
+                <div className="rounded-[13px] bg-[rgba(244,113,113,0.08)] border border-[rgba(244,113,113,0.3)] px-4 py-3.5 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-300 break-words">{error}</p>
+                </div>
+              )}
+
+              {/* Detailed errors from last result */}
+              {!scanning && lastResult && lastResult.errorMessages.length > 0 && (
+                <div className="rounded-[13px] border border-amber-500/30 bg-amber-500/10 px-4 py-3.5">
+                  <p className="text-xs text-amber-200 font-medium mb-2">פרטי שגיאות:</p>
+                  <ul className="text-xs text-amber-200/80 space-y-1 list-disc pr-4">
+                    {lastResult.errorMessages.slice(0, 5).map((msg, idx) => (
+                      <li key={idx} className="break-words">{msg}</li>
+                    ))}
+                    {lastResult.errorMessages.length > 5 && (
+                      <li>ועוד {lastResult.errorMessages.length - 5}...</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-2.5">
+                <button
+                  onClick={handleScan}
+                  disabled={scanning || !hasFolder}
+                  className="flex-1 h-12 flex items-center justify-center gap-2 rounded-[12px] bg-[#2dd4bf] hover:brightness-110 text-[#0b1830] text-sm font-bold transition-[filter] disabled:bg-[rgba(45,212,191,0.35)] disabled:cursor-not-allowed shadow-[0_6px_16px_rgba(45,212,191,0.25)]"
+                >
+                  {scanning ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      סורק...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4" />
+                      סרוק כעת
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handlePickFolder}
+                  disabled={scanning}
+                  title="בחר תיקייה אחרת"
+                  aria-label="בחר תיקייה אחרת"
+                  className="w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-[12px] border border-[rgba(126,152,210,0.25)] text-[#c9d8f2] hover:bg-white/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setConfirmDisconnect(true)}
+                  disabled={scanning || !hasFolder}
+                  title="נתק תיקייה"
+                  aria-label="נתק תיקייה"
+                  className="w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-[12px] border border-[rgba(126,152,210,0.25)] text-[#c9d8f2] hover:bg-[rgba(244,113,113,0.12)] hover:border-[rgba(244,113,113,0.35)] hover:text-red-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Unplug className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Info box */}
+              <div className="rounded-[11px] bg-[rgba(45,212,191,0.05)] border border-[rgba(45,212,191,0.14)] px-4 py-3 flex items-start gap-2">
+                <span className="w-[18px] h-[18px] flex-shrink-0 rounded-full border border-[#2dd4bf] flex items-center justify-center mt-0.5">
+                  <Info className="w-3 h-3 text-[#2dd4bf]" />
+                </span>
+                <p className="text-[12.5px] text-[#8fb0e8] leading-[1.5]">
                   סריקה אוטומטית רצה כשהדפדפן פתוח. סריקת המייל בצד השרת רצה גם בלי דפדפן.
                 </p>
-              </>
-            )}
-          </div>
-        )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
+
+    <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-right">ניתוק תיקייה</AlertDialogTitle>
+            <AlertDialogDescription className="text-right">
+              לנתק את &quot;{handle?.name}&quot;? הקבצים שכבר עובדו יישארו כפי שהם — רק המעקב
+              האוטומטי אחרי התיקייה יופסק.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-2 justify-start">
+            <AlertDialogCancel>ביטול</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDisconnect}>נתק</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
