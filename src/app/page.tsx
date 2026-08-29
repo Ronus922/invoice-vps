@@ -409,24 +409,24 @@ export default function InvoicesPage() {
         onRenamed={refresh}
       />
 
-      {showScanModal && (
-        <ScanGmailModal onClose={() => setShowScanModal(false)} onDone={refresh} />
-      )}
+      <ScanGmailModal
+        open={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        onDone={refresh}
+      />
 
-      {showAccountantSettings && (
-        <AccountantSettings onClose={() => setShowAccountantSettings(false)} />
-      )}
+      <AccountantSettings
+        open={showAccountantSettings}
+        onClose={() => setShowAccountantSettings(false)}
+      />
 
-      {showFolderWatch && (
-        <FolderWatchSettings
-          onClose={() => setShowFolderWatch(false)}
-          onScanned={refresh}
-        />
-      )}
+      <FolderWatchSettings
+        open={showFolderWatch}
+        onClose={() => setShowFolderWatch(false)}
+        onScanned={refresh}
+      />
 
-      {showDriveBackup && (
-        <DriveBackupDialog onClose={() => setShowDriveBackup(false)} />
-      )}
+      <DriveBackupDialog open={showDriveBackup} onClose={() => setShowDriveBackup(false)} />
 
       <InstallBanner />
     </div>

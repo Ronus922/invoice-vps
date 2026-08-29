@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { SidePanel } from '@/components/ui/side-panel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -351,36 +351,41 @@ export default function EditInvoiceDialog({
   )
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent
-        hideClose
-        dir="rtl"
+    <SidePanel
+      open={open}
+      onClose={onClose}
+      title="עריכת חשבונית"
+      widthClassName={fileUrl ? 'w-full lg:w-[1060px]' : 'w-full sm:w-[460px]'}
+      bodyClassName="p-0 min-[900px]:overflow-y-hidden"
+      footer={
+        <>
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-[#2dd4bf] hover:bg-[#28c0ad] text-[#0b1830] font-bold shadow-[0_8px_24px_rgba(45,212,191,0.25)]"
+          >
+            {saving && <Loader2 className="w-4 h-4 animate-spin ml-2" />}
+            שמור
+          </Button>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            className="bg-transparent border-[rgba(126,152,210,0.25)] text-[#c9d8f2]"
+          >
+            ביטול
+          </Button>
+          {validationMsg && <p className="text-xs text-red-400 mr-2">{validationMsg}</p>}
+        </>
+      }
+    >
+      <div
         className={cn(
-          'w-[calc(100%-2rem)] max-h-[85vh] p-0 gap-0 rounded-[20px] overflow-hidden shadow-[0_32px_80px_rgba(4,10,26,0.65)] grid-cols-1 overflow-y-auto',
-          fileUrl
-            ? 'max-w-[1060px] min-[900px]:grid-cols-[1fr_440px] min-[900px]:overflow-y-hidden'
-            : 'max-w-lg'
+          'grid grid-cols-1 min-[900px]:h-full',
+          fileUrl && 'min-[900px]:grid-cols-[1fr_440px]'
         )}
       >
         {/* Form panel (column 1 = physical right in RTL) */}
-        <div className="min-[900px]:col-start-1 min-[900px]:row-start-1 flex flex-col min-h-0 min-[900px]:max-h-[85vh]">
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 pt-5 pb-4 flex-shrink-0">
-            <DialogTitle className="text-[21px] font-extrabold text-[#f4f7fd]">
-              עריכת חשבונית
-            </DialogTitle>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="סגירה"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Scrollable form body */}
-          <div className="min-[900px]:flex-1 min-[900px]:min-h-0 min-[900px]:overflow-y-auto px-6 pb-4 flex flex-col gap-3.5">
+        <div className="min-[900px]:col-start-1 min-[900px]:row-start-1 min-[900px]:overflow-y-auto px-6 py-5 flex flex-col gap-3.5">
             {!invoice.needs_review && invoice.vat_derived && (
               <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-right">
                 <p className="text-xs text-blue-300/90">
@@ -525,34 +530,11 @@ export default function EditInvoiceDialog({
                 {showPreviewMobile ? 'הסתר מסמך' : 'הצג מסמך'}
               </button>
             )}
-          </div>
-
-          {/* Footer */}
-          <div className="flex items-center gap-2 px-6 py-4 border-t border-[rgba(126,152,210,0.14)] flex-shrink-0">
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-              className="bg-[#2dd4bf] hover:bg-[#28c0ad] text-[#0b1830] font-bold shadow-[0_8px_24px_rgba(45,212,191,0.25)]"
-            >
-              {saving && <Loader2 className="w-4 h-4 animate-spin ml-2" />}
-              שמור
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onClose}
-              className="bg-transparent border-[rgba(126,152,210,0.25)] text-[#c9d8f2]"
-            >
-              ביטול
-            </Button>
-            {validationMsg && (
-              <p className="text-xs text-red-400 mr-2">{validationMsg}</p>
-            )}
-          </div>
         </div>
 
         {/* Document preview panel (column 2 = physical left in RTL) */}
         {fileUrl && previewPanel}
-      </DialogContent>
-    </Dialog>
+      </div>
+    </SidePanel>
   )
 }

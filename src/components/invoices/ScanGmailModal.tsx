@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import {
   RefreshCw,
-  X,
   CheckCircle2,
   AlertCircle,
   Loader2,
@@ -14,6 +13,7 @@ import {
   FileText,
   SkipForward,
 } from 'lucide-react'
+import { SidePanel } from '@/components/ui/side-panel'
 
 interface ScanResult {
   mode: 'quick' | 'full'
@@ -53,6 +53,7 @@ interface ScanProgressEvent {
 }
 
 interface ScanGmailModalProps {
+  open: boolean
   onClose: () => void
   onDone: () => void
 }
@@ -69,7 +70,7 @@ function formatDate(iso: string | null): string {
   })
 }
 
-export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps) {
+export default function ScanGmailModal({ open, onClose, onDone }: ScanGmailModalProps) {
   const [status, setStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle')
   const [mode, setMode] = useState<'quick' | 'full'>('quick')
   const [allowRescan, setAllowRescan] = useState(false)
@@ -80,14 +81,22 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
   const [scanProgress, setScanProgress] = useState(0)
   const [progressInfo, setProgressInfo] = useState<ScanProgressEvent | null>(null)
 
-  // Fetch scan status on mount
+  // Panel now stays mounted across opens (SidePanel plays its own exit
+  // animation), so re-fetch and reset to idle on each open instead of once
+  // at first mount — otherwise reopening after a scan shows the stale
+  // done/error screen from last time.
   useEffect(() => {
+    if (!open) return
+    setStatus('idle')
+    setResult(null)
+    setErrorMsg('')
+    setLoadingInfo(true)
     fetch('/api/scan-gmail')
       .then((r) => r.json())
       .then((data) => setScanInfo(data))
       .catch(() => {})
       .finally(() => setLoadingInfo(false))
-  }, [])
+  }, [open])
 
   useEffect(() => {
     if (status !== 'scanning') {
@@ -185,21 +194,7 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div
-        className="relative bg-[#0e1f3d] border border-[rgba(126,152,210,0.18)] rounded-2xl p-6 shadow-2xl w-full max-w-md mx-4"
-        dir="rtl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-bold text-white">סריקת מייל לחשבוניות</h2>
-          <button onClick={onClose} className="text-white/40 hover:text-white transition-colors p-1">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
+    <SidePanel open={open} onClose={onClose} title="סריקת מייל לחשבוניות" icon={Mail}>
         {/* Idle state */}
         {status === 'idle' && (
           <div className="space-y-4">
@@ -447,7 +442,6 @@ export default function ScanGmailModal({ onClose, onDone }: ScanGmailModalProps)
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </SidePanel>
   )
 }

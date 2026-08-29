@@ -2,12 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { Plus, X, Tag, Pencil, Check, Lock, Loader2, Info } from 'lucide-react'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
+import { SidePanel } from '@/components/ui/side-panel'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
 
 const DEFAULT_CATEGORIES = [
@@ -170,37 +165,14 @@ export default function CategoryManager({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent
-        hideClose
-        dir="rtl"
-        className="max-w-[460px] w-[calc(100%-2rem)] p-0 gap-0 rounded-[20px] border-[rgba(126,152,210,0.22)] shadow-[0_32px_80px_rgba(4,10,26,0.65)]"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between gap-3 px-[26px] pt-6 pb-5">
-          <div className="flex items-center gap-3">
-            <div className="w-[42px] h-[42px] flex-shrink-0 rounded-[13px] bg-[rgba(45,212,191,0.12)] border border-[rgba(45,212,191,0.25)] flex items-center justify-center">
-              <Tag className="w-[18px] h-[18px] text-[#2dd4bf]" />
-            </div>
-            <div>
-              <DialogTitle className="text-[18px] font-extrabold text-[#f4f7fd]">
-                ניהול קטגוריות
-              </DialogTitle>
-              <DialogDescription className="text-[13px] text-[#8fb0e8] mt-0.5">
-                {categories.length} קטגוריות · ממוינות לפי שימוש
-              </DialogDescription>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="סגירה"
-            className="w-8 h-8 flex-shrink-0 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="px-[26px] pb-6 flex flex-col gap-4">
+    <SidePanel
+      open={open}
+      onClose={onClose}
+      title="ניהול קטגוריות"
+      subtitle={`${categories.length} קטגוריות · ממוינות לפי שימוש`}
+      icon={Tag}
+    >
+        <div className="flex flex-col gap-4">
           {/* Add new */}
           <div>
             <div className="flex gap-2">
@@ -333,7 +305,6 @@ export default function CategoryManager({
             סגור
           </button>
         </div>
-      </DialogContent>
-    </Dialog>
+    </SidePanel>
   )
 }
