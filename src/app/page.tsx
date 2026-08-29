@@ -92,7 +92,7 @@ export default function InvoicesPage() {
     dateTo: '',
     category: '',
   })
-  const { categories, addCategory, removeCategory } = useCategories()
+  const { categories, addCategory, removeCategory, renameCategory } = useCategories()
 
   const { data: invoices = [], isLoading } = useQuery({
     queryKey: ['invoices'],
@@ -402,8 +402,11 @@ export default function InvoicesPage() {
         open={showCategoryManager}
         onClose={() => setShowCategoryManager(false)}
         categories={categories}
+        invoices={invoices}
         onAdd={addCategory}
         onRemove={removeCategory}
+        onRename={renameCategory}
+        onRenamed={refresh}
       />
 
       {showScanModal && (

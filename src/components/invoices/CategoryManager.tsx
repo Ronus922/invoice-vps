@@ -1,14 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { Plus, X, Tag, Pencil, Check, RotateCcw } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Plus, X, Tag, Pencil, Check, Lock, Loader2, Info } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { InvoiceEntity, type Invoice } from '@/lib/entities'
 
 const DEFAULT_CATEGORIES = [
   'תוכנה',
@@ -30,6 +30,11 @@ const DEFAULT_CATEGORIES = [
 
 const STORAGE_KEY = 'invoice_categories'
 
+function isDuplicate(categories: string[], name: string, excluding?: string): boolean {
+  const norm = name.trim().toLowerCase()
+  return categories.some((c) => c.toLowerCase() === norm && c !== excluding)
+}
+
 export function useCategories() {
   const [categories, setCategories] = useState<string[]>(() => {
     if (typeof window === 'undefined') return DEFAULT_CATEGORIES
@@ -48,7 +53,7 @@ export function useCategories() {
 
   const addCategory = (name: string) => {
     const trimmed = name.trim()
-    if (!trimmed || categories.includes(trimmed)) return false
+    if (!trimmed || isDuplicate(categories, trimmed)) return false
     saveCategories([...categories, trimmed])
     return true
   }
@@ -57,183 +62,275 @@ export function useCategories() {
     saveCategories(categories.filter((c) => c !== name))
   }
 
-  return { categories, addCategory, removeCategory }
+  const renameCategory = (oldName: string, newName: string) => {
+    const trimmed = newName.trim()
+    if (!trimmed || isDuplicate(categories, trimmed, oldName)) return false
+    saveCategories(categories.map((c) => (c === oldName ? trimmed : c)))
+    return true
+  }
+
+  return { categories, addCategory, removeCategory, renameCategory }
 }
 
 interface CategoryManagerProps {
   open: boolean
   onClose: () => void
   categories: string[]
+  invoices: Invoice[]
   onAdd: (name: string) => boolean
   onRemove: (name: string) => void
+  onRename: (oldName: string, newName: string) => boolean
+  onRenamed: () => void
 }
+
+const ROW = 'group flex items-center gap-2.5 px-3.5 py-[9px] rounded-[11px] bg-[rgba(126,152,210,0.06)] border border-[rgba(126,152,210,0.12)] hover:border-[rgba(45,212,191,0.4)] transition-colors'
 
 export default function CategoryManager({
   open,
   onClose,
   categories,
+  invoices,
   onAdd,
   onRemove,
+  onRename,
+  onRenamed,
 }: CategoryManagerProps) {
   const [newCat, setNewCat] = useState('')
-  const [error, setError] = useState('')
+  const [addError, setAddError] = useState('')
   const [editingCat, setEditingCat] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [editError, setEditError] = useState('')
+  const [renaming, setRenaming] = useState(false)
 
-  const handleEdit = (cat: string) => {
-    setEditingCat(cat)
-    setEditValue(cat)
-  }
-
-  const handleEditSave = (oldCat: string) => {
-    const trimmed = editValue.trim()
-    if (!trimmed || trimmed === oldCat) {
-      setEditingCat(null)
-      return
+  const counts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const inv of invoices) {
+      if (!inv.category) continue
+      map.set(inv.category, (map.get(inv.category) ?? 0) + 1)
     }
-    onRemove(oldCat)
-    onAdd(trimmed)
-    setEditingCat(null)
-  }
+    return map
+  }, [invoices])
+
+  const rows = useMemo(() => {
+    const list = categories.map((name) => ({ name, count: counts.get(name) ?? 0 }))
+    list.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'he'))
+    return list
+  }, [categories, counts])
+
+  const maxCount = Math.max(1, ...rows.map((r) => r.count))
 
   const handleAdd = () => {
-    if (!newCat.trim()) return
-    const ok = onAdd(newCat)
+    const trimmed = newCat.trim()
+    if (!trimmed) return
+    const ok = onAdd(trimmed)
     if (ok) {
       setNewCat('')
-      setError('')
+      setAddError('')
     } else {
-      setError('קטגוריה זו כבר קיימת')
+      setAddError('קטגוריה זו כבר קיימת')
     }
   }
 
-  const handleReset = () => {
-    localStorage.removeItem(STORAGE_KEY)
-    DEFAULT_CATEGORIES.forEach((cat) => {
-      if (!categories.includes(cat)) onAdd(cat)
-    })
+  const startEdit = (cat: string) => {
+    setEditingCat(cat)
+    setEditValue(cat)
+    setEditError('')
   }
 
-  const isCustom = (cat: string) => !DEFAULT_CATEGORIES.includes(cat)
+  const cancelEdit = () => {
+    setEditingCat(null)
+    setEditError('')
+  }
+
+  const handleEditSave = async (oldCat: string) => {
+    const trimmed = editValue.trim()
+    if (!trimmed || trimmed === oldCat) {
+      cancelEdit()
+      return
+    }
+    const ok = onRename(oldCat, trimmed)
+    if (!ok) {
+      setEditError('קטגוריה זו כבר קיימת')
+      return
+    }
+    setRenaming(true)
+    try {
+      // Categories are a free-text field on each invoice, not a server entity —
+      // a rename has to be pushed onto every invoice that used the old name,
+      // or those rows silently fall out of the picker's list.
+      const affected = invoices.filter((inv) => inv.category === oldCat)
+      await Promise.all(
+        affected.map((inv) => InvoiceEntity.update(inv.id, { category: trimmed }))
+      )
+      onRenamed()
+    } finally {
+      setRenaming(false)
+      cancelEdit()
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-sm" dir="rtl">
-        <DialogHeader>
-          <DialogTitle className="text-right flex items-center gap-2.5 justify-end">
-            <span>ניהול קטגוריות</span>
-            <div className="bg-blue-500/20 p-1.5 rounded-lg">
-              <Tag className="w-4 h-4 text-blue-400" />
+      <DialogContent
+        hideClose
+        dir="rtl"
+        className="max-w-[460px] w-[calc(100%-2rem)] p-0 gap-0 rounded-[20px] border-[rgba(126,152,210,0.22)] shadow-[0_32px_80px_rgba(4,10,26,0.65)]"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 px-[26px] pt-6 pb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-[42px] h-[42px] flex-shrink-0 rounded-[13px] bg-[rgba(45,212,191,0.12)] border border-[rgba(45,212,191,0.25)] flex items-center justify-center">
+              <Tag className="w-[18px] h-[18px] text-[#2dd4bf]" />
             </div>
-          </DialogTitle>
-          <DialogDescription className="text-right">
-            {categories.length} קטגוריות פעילות
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* Add new */}
-        <div className="flex gap-2" dir="rtl">
-          <div className="relative flex-1">
-            <input
-              value={newCat}
-              onChange={(e) => {
-                setNewCat(e.target.value)
-                setError('')
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-              placeholder="הוסף קטגוריה חדשה..."
-              className="w-full bg-white/5 border border-white/15 text-white placeholder:text-white/30 text-sm rounded-xl px-3 py-2.5 text-right focus:outline-none focus:border-blue-400/50 focus:ring-1 focus:ring-blue-400/20 transition-all"
-              dir="rtl"
-            />
+            <div>
+              <DialogTitle className="text-[18px] font-extrabold text-[#f4f7fd]">
+                ניהול קטגוריות
+              </DialogTitle>
+              <DialogDescription className="text-[13px] text-[#8fb0e8] mt-0.5">
+                {categories.length} קטגוריות · ממוינות לפי שימוש
+              </DialogDescription>
+            </div>
           </div>
           <button
-            onClick={handleAdd}
-            disabled={!newCat.trim()}
-            className="flex-shrink-0 bg-blue-500 hover:bg-blue-600 disabled:bg-white/10 disabled:text-white/20 text-white rounded-xl px-3 py-2.5 transition-all"
+            onClick={onClose}
+            aria-label="סגירה"
+            className="w-8 h-8 flex-shrink-0 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <Plus className="w-4 h-4" />
+            <X className="w-4 h-4" />
           </button>
         </div>
-        {error && (
-          <p className="text-xs text-amber-400 text-right -mt-1">{error}</p>
-        )}
 
-        {/* List */}
-        <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-1" dir="rtl">
-          {categories.map((cat) => (
-            <div
-              key={cat}
-              className="group flex items-center gap-2 px-3 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-transparent hover:border-white/10 rounded-xl transition-all"
-              dir="rtl"
-            >
-              {editingCat === cat ? (
-                <>
-                  <input
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleEditSave(cat)
-                      if (e.key === 'Escape') setEditingCat(null)
-                    }}
-                    className="flex-1 bg-white/10 border border-blue-400/30 text-white text-sm rounded-lg px-2.5 py-1 text-right focus:outline-none focus:border-blue-400/50"
-                    dir="rtl"
-                    autoFocus
-                  />
-                  <button
-                    onClick={() => handleEditSave(cat)}
-                    className="text-emerald-400 hover:text-emerald-300 p-1 rounded-lg hover:bg-emerald-500/10 transition-all"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setEditingCat(null)}
-                    className="text-white/30 hover:text-white/60 p-1 rounded-lg hover:bg-white/5 transition-all"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="flex-1 text-sm text-white/80">{cat}</span>
-                  {isCustom(cat) && (
-                    <span className="text-[10px] text-blue-400/60 bg-blue-500/10 px-1.5 py-0.5 rounded-md">
-                      מותאם
-                    </span>
-                  )}
-                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="px-[26px] pb-6 flex flex-col gap-4">
+          {/* Add new */}
+          <div>
+            <div className="flex gap-2">
+              <input
+                value={newCat}
+                onChange={(e) => {
+                  setNewCat(e.target.value)
+                  setAddError('')
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                placeholder="הוסף קטגוריה חדשה..."
+                className="flex-1 min-w-0 h-11 rounded-[11px] bg-[rgba(126,152,210,0.07)] border border-[rgba(126,152,210,0.18)] text-[#f4f7fd] placeholder:text-[#5d729c] text-sm px-3.5 text-right focus:outline-none focus:border-[rgba(45,212,191,0.5)] transition-colors"
+                dir="rtl"
+              />
+              <button
+                onClick={handleAdd}
+                disabled={!newCat.trim()}
+                className="flex-shrink-0 w-11 h-11 rounded-[11px] bg-[#2dd4bf] hover:bg-[#28c0ad] disabled:bg-[rgba(45,212,191,0.35)] disabled:cursor-not-allowed text-[#0b1830] flex items-center justify-center transition-colors"
+              >
+                <Plus className="w-[18px] h-[18px]" />
+              </button>
+            </div>
+            {addError && <p className="text-xs text-amber-400 mt-1.5">{addError}</p>}
+          </div>
+
+          {/* List */}
+          <div className="max-h-[340px] overflow-y-auto pl-1 -mr-0 flex flex-col gap-1.5">
+            {rows.map(({ name, count }) => (
+              <div key={name}>
+                <div className={ROW}>
+                {editingCat === name ? (
+                  <>
+                    <input
+                      value={editValue}
+                      onChange={(e) => {
+                        setEditValue(e.target.value)
+                        setEditError('')
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleEditSave(name)
+                        if (e.key === 'Escape') cancelEdit()
+                      }}
+                      className="flex-1 min-w-0 h-8 rounded-lg bg-[rgba(126,152,210,0.1)] border border-[rgba(45,212,191,0.5)] text-[#f4f7fd] text-sm px-2.5 text-right focus:outline-none"
+                      dir="rtl"
+                      autoFocus
+                      disabled={renaming}
+                    />
                     <button
-                      onClick={() => handleEdit(cat)}
-                      className="text-white/30 hover:text-blue-400 p-1 rounded-lg hover:bg-blue-500/10 transition-all"
+                      onClick={() => handleEditSave(name)}
+                      disabled={renaming}
+                      aria-label="שמירה"
+                      className="w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center text-[#2dd4bf] hover:bg-[rgba(45,212,191,0.12)] transition-colors disabled:opacity-50"
                     >
-                      <Pencil className="w-3.5 h-3.5" />
+                      {renaming ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
                     </button>
                     <button
-                      onClick={() => onRemove(cat)}
-                      className="text-white/30 hover:text-red-400 p-1 rounded-lg hover:bg-red-500/10 transition-all"
+                      onClick={cancelEdit}
+                      disabled={renaming}
+                      aria-label="ביטול"
+                      className="w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center text-[#7e97c4] hover:bg-white/10 transition-colors disabled:opacity-50"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 min-w-0 truncate text-sm font-semibold text-[#f4f7fd]">
+                      {name}
+                    </span>
+                    <span className="w-[90px] h-[5px] flex-shrink-0 rounded-full bg-[rgba(126,152,210,0.15)] overflow-hidden">
+                      <span
+                        className="block h-full rounded-full"
+                        style={{
+                          width: `${(count / maxCount) * 100}%`,
+                          background: 'linear-gradient(90deg, #2dd4bf, #5eead4)',
+                        }}
+                      />
+                    </span>
+                    <span className="text-[12.5px] text-[#8fb0e8] flex-shrink-0 w-6 text-center" dir="ltr">
+                      {count}
+                    </span>
+                    <button
+                      onClick={() => startEdit(name)}
+                      aria-label="עריכת שם"
+                      className="w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center text-[#8fb0e8] hover:text-[#2dd4bf] hover:bg-[rgba(45,212,191,0.12)] transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    {count === 0 ? (
+                      <button
+                        onClick={() => onRemove(name)}
+                        aria-label="מחיקה"
+                        className="w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center text-[#7e97c4] hover:text-[#f47171] hover:bg-[rgba(244,113,113,0.15)] transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <span
+                        className="w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center text-[#7e97c4] opacity-45 cursor-not-allowed"
+                        title="לא ניתן למחוק — קיימות חשבוניות משויכות"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                      </span>
+                    )}
+                  </>
+                )}
+                </div>
+                {editingCat === name && editError && (
+                  <p className="text-xs text-amber-400 mt-1 px-1">{editError}</p>
+                )}
+              </div>
+            ))}
+          </div>
 
-        {/* Footer */}
-        <div className="flex gap-2 pt-1">
+          {/* Info note */}
+          <div className="flex items-center gap-1.5 text-xs text-[#7e97c4]">
+            <Info className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>מחיקה אפשרית רק לקטגוריה ללא חשבוניות משויכות.</span>
+          </div>
+
+          {/* Close */}
           <button
             onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-all"
+            className="w-full h-11 rounded-[11px] bg-[#2dd4bf] hover:bg-[#28c0ad] text-[#0b1830] text-sm font-bold transition-colors"
           >
             סגור
-          </button>
-          <button
-            onClick={handleReset}
-            className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 text-xs transition-all"
-          >
-            <RotateCcw className="w-3 h-3" />
-            איפוס
           </button>
         </div>
       </DialogContent>
