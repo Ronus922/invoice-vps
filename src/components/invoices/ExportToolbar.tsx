@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Download, Printer, Loader2, FileSpreadsheet } from 'lucide-react'
 import type { Invoice } from '@/lib/entities'
 import { fileHref } from '@/lib/file-url'
-import { currencySymbol } from '@/lib/format'
+import { formatCurrency } from '@/lib/format'
 
 interface ExportToolbarProps {
   filteredInvoices: Invoice[]
@@ -37,7 +37,7 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
         <td>${escapeHtml(inv.vendor || '—')}</td>
         <td>${escapeHtml(inv.doc_number || '—')}</td>
         <td>${escapeHtml(inv.description || '—')}</td>
-        <td>${escapeHtml(currencySymbol(inv.currency))}${(inv.total || 0).toLocaleString('he-IL')}</td>
+        <td>${escapeHtml(formatCurrency(inv.total ?? 0, inv.currency))}</td>
         <td>${escapeHtml(inv.payment_method || '—')}</td>
         <td>${escapeHtml(inv.category || '—')}</td>
       </tr>`
@@ -50,7 +50,7 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
       totalsByCurrency.set(code, (totalsByCurrency.get(code) ?? 0) + (inv.total || 0))
     }
     const totalsLabel = [...totalsByCurrency.entries()]
-      .map(([code, sum]) => `${currencySymbol(code)}${sum.toLocaleString('he-IL')}`)
+      .map(([code, sum]) => formatCurrency(sum, code))
       .join(' + ')
 
     const html = `

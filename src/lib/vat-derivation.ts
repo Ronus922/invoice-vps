@@ -46,7 +46,8 @@ export function israelVatRate(dateStr?: string | null): number {
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 export function arithmeticTolerance(total: number): number {
-  return Math.max(0.05, total * 0.005)
+  // abs() so credit notes (negative totals) get the same relative tolerance.
+  return Math.max(0.05, Math.abs(total) * 0.005)
 }
 
 function isBalanced(pretax: number, vat: number, total: number): boolean {
@@ -57,8 +58,9 @@ export function deriveVatFromTotal(input: VatDerivationInput): VatDerivationResu
   const { pretax, vat, total } = input
   const passthrough: VatDerivationResult = { pretax, vat, vatDerived: false, rate: null }
 
-  // Missing/invalid total stays with the validator (needs_review).
-  if (total == null || !Number.isFinite(total) || total <= 0) return passthrough
+  // Missing/zero total stays with the validator (needs_review). Negative
+  // totals are credit notes — derived like any other, yielding negative VAT.
+  if (total == null || !Number.isFinite(total) || total === 0) return passthrough
 
   const bothMissing = pretax == null && vat == null
   const mismatch = pretax != null && vat != null && !isBalanced(pretax, vat, total)

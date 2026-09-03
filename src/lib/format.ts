@@ -29,5 +29,9 @@ export function formatCurrency(
   currency: string | null | undefined = 'ILS'
 ): string {
   if (val == null) return '—'
-  return `${currencySymbol(currency)}${Number(val).toLocaleString('he-IL', { minimumFractionDigits: 2 })}`
+  const n = Number(val)
+  // Credit notes are negative — keep the minus in front of the symbol (‎-₪143.27)
+  // instead of the awkward ₪-143.27.
+  const sign = n < 0 ? '-' : ''
+  return `${sign}${currencySymbol(currency)}${Math.abs(n).toLocaleString('he-IL', { minimumFractionDigits: 2 })}`
 }

@@ -124,7 +124,7 @@ async function main() {
           console.log(`  ? manual  ${label}`)
           return
         }
-        const hasSignal = (verdict.total ?? 0) > 0 || Boolean(verdict.docNumber) || row.total > 0
+        const hasSignal = (verdict.total ?? 0) !== 0 || Boolean(verdict.docNumber) || row.total !== 0
         const bookable = !isNonInvoiceDocType(verdict.docType) && (verdict.docType !== 'unknown' || hasSignal)
         if (bookable) {
           const validation = validateInvoiceArithmetic({ pretax: row.pretax, vat: row.vat, total: row.total })

@@ -61,7 +61,7 @@ const InvoiceWriteSchema = z.object({
 
 // PATCH treats an empty total as "not provided" (see PATCH handler) — POST
 // keeps the coerce-to-0 behavior so a failed extraction still saves the file
-// (flagged by the total<=0 validator) instead of being rejected.
+// (flagged by the total=0 validator) instead of being rejected.
 const InvoicePatchSchema = InvoiceWriteSchema.extend({
   total: numericOrNull.optional(),
 })

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // ONE-OFF: derive pretax/vat from total for rows where VAT extraction failed.
-// Covers two populations:
-//   1. vat IS NULL AND pretax IS NULL AND total > 0 (never flagged, sent with
+// Covers three populations:
+//   1. vat IS NULL AND pretax IS NULL AND total ≠ 0 (never flagged, sent with
 //      an empty VAT column)
 //   2. needs_review=true rows whose ONLY problem is pretax+vat ≠ total — the
 //      user decided to trust the printed total; these get unflagged so they
 //      can be sent to the accountant.
+//   3. needs_review=true rows flagged ONLY for a negative total under the old
+//      total<=0 rule — credit notes (חשבוניות זיכוי) are valid; derive negative
+//      VAT and unflag.
 // Mirrors src/lib/vat-derivation.ts (keep in sync). Backs up affected rows
 // first. Run with --dry-run to preview.
 //   node scripts/backfill-derive-vat.mjs [--dry-run]
@@ -56,18 +59,24 @@ function derive(row) {
 
 const MISMATCH_ONLY = `(
   needs_review = true
-  and total is not null and total > 0
+  and total is not null and total <> 0
   and pretax is not null and vat is not null
-  and abs((pretax + vat) - total) > greatest(0.05, total * 0.005)
+  and abs((pretax + vat) - total) > greatest(0.05, abs(total) * 0.005)
 )`
-const NULL_PAIR = `(vat is null and pretax is null and total is not null and total > 0 and needs_review = false)`
+const NULL_PAIR = `(vat is null and pretax is null and total is not null and total <> 0 and needs_review = false)`
+const NEG_TOTAL_FLAGGED = `(
+  needs_review = true
+  and total is not null and total < 0
+  and pretax is null and vat is null
+  and validation_error like 'סה״כ לא תקין%'
+)`
 
 const rows = JSON.parse(
   psql(`select coalesce(json_agg(row_to_json(s)), '[]') from (
     select id, date, vendor, doc_number, currency, doc_type, pretax, vat, total,
            needs_review, validation_error
     from public.invoices
-    where ${NULL_PAIR} or ${MISMATCH_ONLY}
+    where ${NULL_PAIR} or ${MISMATCH_ONLY} or ${NEG_TOTAL_FLAGGED}
     order by created_at
   ) s`)
 )

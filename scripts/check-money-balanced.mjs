@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // INVARIANT: no invoice is SILENTLY wrong. An invoice is "unsound" when
-//   total is missing/≤0, or (both pretax & vat present) pretax+vat ≠ total
-//   beyond tolerance max(0.05, total*0.005) — same rule as the app.
+//   total is missing/zero, or (both pretax & vat present) pretax+vat ≠ total
+//   beyond tolerance max(0.05, abs(total)*0.005) — same rule as the app.
+//   Negative totals are VALID (credit notes / חשבוניות זיכוי).
 //   The app's contract is: unsound ⟹ needs_review=true (surfaced for a human,
 //   and check-needs-review-not-sent keeps it out of the accountant export).
 //   So the real failure is an unsound invoice that is NOT flagged — a wrong
@@ -11,9 +12,9 @@
 import { run, scalar, fail, ok, info } from './_lib.mjs'
 
 const UNSOUND = `(
-  total is null or total <= 0
+  total is null or total = 0
   or (pretax is not null and vat is not null
-      and abs((pretax + vat) - total) > greatest(0.05, total * 0.005))
+      and abs((pretax + vat) - total) > greatest(0.05, abs(total) * 0.005))
 )`
 
 run('check-money-balanced', async () => {
@@ -43,8 +44,8 @@ run('check-money-balanced', async () => {
   const badDerived = scalar(`
     select count(*) from public.invoices
     where vat_derived = true
-      and (pretax is null or vat is null or total is null or total <= 0
-           or abs((pretax + vat) - total) > greatest(0.05, total * 0.005))`)
+      and (pretax is null or vat is null or total is null or total = 0
+           or abs((pretax + vat) - total) > greatest(0.05, abs(total) * 0.005))`)
   if (badDerived === '0') ok('כל השורות עם מע״מ מחושב (vat_derived) מאוזנות')
   else fail(`${badDerived} שורות vat_derived לא מאוזנות — סטייה בין vat-derivation.ts לחישוב בפועל`)
 

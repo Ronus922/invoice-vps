@@ -150,9 +150,11 @@ const NEGATIVE_INVOICE_TERMS = [
   'פסק דין',
 ]
 
-// Bump whenever the veto rules above change — previously vetoed messages are
-// re-opened exactly once under the new rules (see getSettledEmailIds).
-const FILTER_VERSION = 2
+// Bump whenever the veto rules above OR the positive intake gate change —
+// previously vetoed messages are re-opened exactly once under the new rules
+// (see getSettledEmailIds). v3: negative totals (credit notes) now count as a
+// financial signal, so past 'no_financial_signal' rejections get a re-scan.
+const FILTER_VERSION = 3
 
 interface ProcessResult {
   status: 'created' | 'duplicate' | 'error' | 'rejected'
@@ -395,11 +397,12 @@ async function processAttachment(
     // the system from email. 'other' (contracts, letters, quotes, legal docs)
     // is rejected outright — logged in scanned_emails.skipped_attachments,
     // never a review row for the user to triage. 'unknown' passes only with a
-    // financial signal (an amount or a document number); manual/folder uploads
-    // are deliberate and keep the softer review-flag behavior.
+    // financial signal (a nonzero amount — negative means a credit note — or a
+    // document number); manual/folder uploads are deliberate and keep the
+    // softer review-flag behavior.
     const gateTotal = Number(extracted.total ?? 0)
     const hasFinancialSignal =
-      (Number.isFinite(gateTotal) && gateTotal > 0) ||
+      (Number.isFinite(gateTotal) && gateTotal !== 0) ||
       Boolean(String(extracted.doc_number ?? '').trim())
     const bookable =
       !isNonInvoiceDocType(extracted.doc_type) &&
@@ -497,7 +500,7 @@ async function processAttachment(
     coerceRequiredIdentityFields(insertPayload)
 
     // DB has NOT NULL on total. Mirror /api/invoices POST: a failed extraction
-    // (total=null) still saves the file, flagged by the total<=0 validator —
+    // (total=null) still saves the file, flagged by the total=0 validator —
     // otherwise the insert 23502s and the message retries (and re-bills) on
     // every scan forever.
     if (insertPayload.total == null) insertPayload.total = 0

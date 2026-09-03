@@ -46,7 +46,7 @@ function isNonInvoiceFlagged(inv: Invoice) {
 // misclassified real invoices → quick-confirm), then amount-less flagged ones
 // (most likely genuine junk → delete), then everything else.
 function triageRank(inv: Invoice) {
-  if (isNonInvoiceFlagged(inv)) return inv.total > 0 ? 0 : 1
+  if (isNonInvoiceFlagged(inv)) return inv.total !== 0 ? 0 : 1
   return 2
 }
 
@@ -241,7 +241,7 @@ export default function IncompleteInvoicesAlert({
                           </p>
                         )}
                         <p className="text-[11px] text-white/40 mt-0.5 truncate" dir="rtl">
-                          {inv.total > 0 ? formatCurrency(inv.total, inv.currency) : 'ללא סכום'}
+                          {inv.total !== 0 ? formatCurrency(inv.total, inv.currency) : 'ללא סכום'}
                           {inv.date ? ` · ${inv.date}` : ''}
                           {inv.file_name ? ` · ${inv.file_name}` : ''}
                         </p>

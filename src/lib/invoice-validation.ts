@@ -17,7 +17,10 @@ export function validateInvoiceArithmetic(inv: InvoiceAmounts): ValidationResult
   if (total == null) {
     return { ok: false, reason: 'סה״כ חסר — לא חולץ מהחשבונית', needsReview: true }
   }
-  if (!Number.isFinite(total) || total <= 0) {
+  // Negative totals are legitimate — credit notes (חשבוניות זיכוי) reduce the
+  // amount owed. Only zero is invalid: it means extraction failed (POST coerces
+  // a missing total to 0 so the file is still saved, flagged here).
+  if (!Number.isFinite(total) || total === 0) {
     return { ok: false, reason: `סה״כ לא תקין (${total})`, needsReview: true }
   }
 
@@ -27,7 +30,7 @@ export function validateInvoiceArithmetic(inv: InvoiceAmounts): ValidationResult
   if (pretax != null && vat != null) {
     const sum = pretax + vat
     const diff = Math.abs(sum - total)
-    const tolerance = Math.max(0.05, total * 0.005)
+    const tolerance = Math.max(0.05, Math.abs(total) * 0.005)
     if (diff > tolerance) {
       return {
         ok: false,

@@ -49,14 +49,14 @@ const rows = psql(`
   select id||'\t'||vendor||'\t'||coalesce(doc_number,'')||'\t'||coalesce(pretax::text,'')||'\t'||coalesce(vat::text,'')||'\t'||coalesce(total::text,'')||'\t'||coalesce(currency,'')||'\t'||file_url
   from public.invoices
   where needs_review=false and (
-    (total is null or total<=0) or
-    (pretax is not null and vat is not null and abs((pretax+vat)-total)>greatest(0.05,total*0.005)))
+    (total is null or total=0) or
+    (pretax is not null and vat is not null and abs((pretax+vat)-total)>greatest(0.05,abs(total)*0.005)))
   order by created_at`).split('\n').filter(Boolean).map((l) => {
   const [id, vendor, doc_number, pretax, vat, total, currency, file_url] = l.split('\t')
   return { id, vendor, doc_number, pretax, vat, total, currency, file_url }
 })
 
-const bal = (p, v, t) => (t != null && t > 0 && (p == null || v == null || Math.abs(p + v - t) <= Math.max(0.05, t * 0.005)))
+const bal = (p, v, t) => (t != null && t !== 0 && (p == null || v == null || Math.abs(p + v - t) <= Math.max(0.05, Math.abs(t) * 0.005)))
 const results = []
 
 for (const r of rows) {
