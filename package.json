@@ -18,6 +18,7 @@
     "check:currency": "node scripts/check-currency-valid.mjs",
     "check:review": "node scripts/check-needs-review-not-sent.mjs",
     "check:dupes": "node scripts/check-no-duplicate-invoices.mjs",
+    "test:e2e": "playwright test",
     "check:all": "npm run typecheck && npm run lint && npm run check:secrets && npm run check:auth && npm run check:source && npm run check:anon && npm run check:money && npm run check:currency && npm run check:review && npm run check:dupes"
   },
   "keywords": [],
@@ -67,6 +68,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/uuid": "^11.0.0",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.2.12"

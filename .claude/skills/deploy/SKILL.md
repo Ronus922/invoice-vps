@@ -35,6 +35,10 @@ bash scripts/deploy.sh
 ## שלב 3 — אימות
 
 - הסקריפט מסתיים ב-`✓ deploy ok: <old> → <new>`. אם ה-health check נכשל הוא מדפיס את 30 שורות הלוג האחרונות של השירות.
+- הרץ בדיקת עשן E2E מול הפרודקשן החי (קריאה בלבד — שער אימות + עמוד login):
+  ```bash
+  E2E_BASE_URL=http://127.0.0.1:3002 pnpm test:e2e
+  ```
 - בדיקה ידנית נוספת: `systemctl status invoice.service` ו-`journalctl -u invoice.service -n 30 --no-pager`.
 
 ## Rollback
