@@ -1,0 +1,280 @@
+# ============================================================================
+# CI — runs the existing `check:all` suite on every push and pull request.
+#
+# WHY THESE DECISIONS (audited 2026-09-18 against the scripts themselves):
+#
+# 1. GITHUB-HOSTED RUNNERS, NEVER SELF-HOSTED.
+#    Ronus922/invoice-vps is a PUBLIC repo. A self-hosted runner on the VPS
+#    would execute workflow code from any fork's pull request on the production
+#    server, with the production database on localhost. That is remote code
+#    execution by design. Hosted, disposable runners are the only safe option
+#    here — and they are also why the DB checks below cannot run (see 5).
+#
+# 2. fetch-depth: 0 ON THE `checks` JOB.
+#    scripts/check-no-secrets.mjs does NOT scan git history: it uses
+#    `git ls-files` (tracked files at HEAD) and `git grep` (working tree only)
+#    — no `git log --all`, no `rev-list`. So a shallow clone does not defang it
+#    today, and full depth is not strictly required. It is set anyway as cheap
+#    insurance: if the script is ever extended to scan history, a depth-1 clone
+#    would make it pass on ~nothing and look green. Costing a few seconds now
+#    beats a silent false pass later. Every other job keeps the default depth 1.
+#
+# 3. WHY THE JOBS ARE SPLIT THIS WAY.
+#    Each of the ten checks was read and classified by what it actually needs:
+#
+#      typecheck     tsc --noEmit                  — no network, no DB, no secrets
+#      lint          eslint .                      — no network, no DB, no secrets
+#      check:secrets git ls-files + git grep       — no network, no DB (see 4)
+#      check:auth    reads src/app/api/**/route.ts — no network, no DB, no secrets
+#      check:source  reads migrations + route.ts   — no network, no DB, no secrets
+#      ---------------------------------------------------------------------
+#      check:anon    HTTPS fetch to Supabase REST  — NETWORK + 2 public env vars
+#      check:money   psql on public.invoices       — DB (localhost only)
+#      check:currency psql on public.invoices      — DB (localhost only)
+#      check:review  psql on public.invoices       — DB (localhost only)
+#      check:dupes   psql + CREATE/DROP DATABASE   — DB (localhost only), privileged
+#
+#    typecheck and lint are their own jobs so a type error and a lint error are
+#    two distinct red checks, not one. The three environment-free invariant
+#    scripts share the `checks` job — they need no `pnpm install` at all (they
+#    import nothing outside node: builtins and only shell out to git), so that
+#    job is seconds long. Everything needing network or a database is
+#    quarantined below, out of any job that should ever gate a merge.
+#
+# 4. check:secrets IS ONLY PARTLY EFFECTIVE ON A CLEAN RUNNER — ON PURPOSE.
+#    The script has three parts. Parts (1) "no .env file is tracked" and (3)
+#    "no Anthropic key prefix, service-role JWT or private-key header appears in
+#    tracked code" work fully in CI and are real coverage. Those three literal
+#    patterns are deliberately not spelled out in this comment: check:secrets
+#    greps every tracked file, so quoting one here would fail the check itself.
+#    Part (2) — "no literal value from .env.local appears in a tracked file" —
+#    reads those values out of .env.local, which does not exist on a runner.
+#    Verified: on a fresh clone it prints its ✓ line having compared nothing,
+#    which is a silent false pass. It cannot be made real in CI
+#    without storing SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY,
+#    GMAIL_REFRESH_TOKEN, CRON_SECRET and DATABASE_URL as Actions secrets of a
+#    PUBLIC repo — uploading the crown jewels to prove they were not leaked.
+#    We deliberately do not. Part (2) stays a local / VPS check, where .env.local
+#    actually lives. Do not read this job's green as "no secret ever leaked".
+#
+# 5. THE FOUR DB CHECKS CANNOT RUN HERE AT ALL — AND THAT IS NOT A `skip`
+#    WAITING ON SECRETS. DIRECT_URL points at postgresql://…@localhost:5432:
+#    the Postgres instance is bound to the VPS itself and is not reachable from
+#    the public internet. No GitHub secret can change that. check:dupes is worse
+#    still — it issues CREATE DATABASE / DROP DATABASE, so it needs a
+#    cluster-admin DSN. Handing that to a public repo's CI is not on the table.
+#    They are surfaced as a permanently-reporting `db-invariants` job rather
+#    than quietly left out, so the gap stays visible in the checks list.
+#
+# 6. `skip` IS NOT `pass`.
+#    The two quarantined jobs exit 0 so they never block, but they print exactly
+#    what did not run and why — to the log AND to the run summary. A green tick
+#    on `anon-isolation` or `db-invariants` means "this did not run", not "this
+#    passed". Neither should ever be added to a required-status-check list.
+#
+# BRANCH PROTECTION (not configured here — Ronen's call after a green run):
+#    Candidates for required checks: `typecheck`, `lint`, `checks`.
+#    NOT candidates: `anon-isolation`, `db-invariants`.
+# ============================================================================
+
+name: CI
+
+on: [push, pull_request]
+
+# Read-only token. Nothing here writes to the repo, and on a public repo the
+# default permissive token is an unnecessary blast radius.
+permissions:
+  contents: read
+
+# `on: [push, pull_request]` means a branch with an open PR gets two runs; the
+# event is part of the group so they do not cancel each other, while a second
+# push to the same branch cancels the first run's leftovers.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  # The VPS runs Node v20.20.1 and package.json declares no `engines` field,
+  # so CI pins the production major rather than drifting onto the runner default.
+  NODE_VERSION: '20'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # tsc --noEmit. Needs a full install (types come from node_modules).
+  # --------------------------------------------------------------------------
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4   # version comes from packageManager in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # next-env.d.ts hard-imports ./.next/types/routes.d.ts, which `next build`
+      # or `next dev` generates and which is not committed. `skipLibCheck: true`
+      # hides the missing import, so tsc would still exit 0 — but it would be
+      # checking LESS than a dev machine does (no typed-route validation).
+      # `next typegen` produces just those types, without a full build, so CI
+      # checks the same surface a developer does.
+      - name: Generate Next route types
+        run: pnpm exec next typegen
+
+      - run: pnpm run typecheck
+
+  # --------------------------------------------------------------------------
+  # eslint. Separate job so lint failures are distinguishable at a glance.
+  # --------------------------------------------------------------------------
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run lint
+
+  # --------------------------------------------------------------------------
+  # The environment-free invariant checks. No network, no database, no secrets,
+  # and no `pnpm install` — these scripts import nothing outside node: builtins.
+  # Each step runs even if an earlier one failed, so one PR shows every problem
+  # instead of only the first; the job is red if any of them was red.
+  # --------------------------------------------------------------------------
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # see header note 2
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Partial coverage by design — see header note 4.
+      - name: check:secrets (tracked .env files + key patterns)
+        run: pnpm run check:secrets
+
+      - name: check:auth (no API route without an auth gate)
+        if: ${{ !cancelled() }}
+        run: pnpm run check:auth
+
+      - name: check:source (code z.enum matches the DB CHECK)
+        if: ${{ !cancelled() }}
+        run: pnpm run check:source
+
+  # --------------------------------------------------------------------------
+  # check:anon — proves the public anon key cannot read invoices, gmail_tokens
+  # or scanned_emails. It talks to https://db.bios.co.il over the internet, so
+  # it CAN run on a hosted runner, unlike the psql checks.
+  #
+  # TO ENABLE, add these two repository secrets (Settings → Secrets and
+  # variables → Actions):
+  #     NEXT_PUBLIC_SUPABASE_URL       e.g. https://db.bios.co.il
+  #     NEXT_PUBLIC_SUPABASE_ANON_KEY  the anon/publishable key
+  # Both are NEXT_PUBLIC_* — they are already shipped to every browser that
+  # loads the app, so this is not new exposure. They are stored as secrets only
+  # so that fork pull requests cannot use them to hammer the live project:
+  # GitHub withholds secrets from fork PRs, which lands those runs in the SKIP
+  # branch below automatically.
+  #
+  # Never make this a required status check: without the secrets it skips, and
+  # a skip must not be able to look like a merge-gating pass.
+  # --------------------------------------------------------------------------
+  anon-isolation:
+    name: anon-isolation (skips without secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: check:anon (or report exactly why it did not run)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "${NEXT_PUBLIC_SUPABASE_URL}" ] || [ -z "${NEXT_PUBLIC_SUPABASE_ANON_KEY}" ]; then
+            {
+              echo "### ⏭️ check:anon — SKIPPED (this is NOT a pass)"
+              echo ""
+              echo "**Did not run:** \`check:anon\` — anon key isolation of"
+              echo "\`invoices\`, \`gmail_tokens\`, \`scanned_emails\`."
+              echo ""
+              echo "**Why:** \`NEXT_PUBLIC_SUPABASE_URL\` and/or"
+              echo "\`NEXT_PUBLIC_SUPABASE_ANON_KEY\` are not available to this run."
+              echo "Either they are not set as repository secrets, or this is a pull"
+              echo "request from a fork (GitHub withholds secrets from fork PRs)."
+              echo ""
+              echo "**Nothing was verified about anon exposure in this run.**"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Secrets present — running check:anon against the live project."
+          pnpm run check:anon
+
+  # --------------------------------------------------------------------------
+  # The four database invariants. This job exists to keep their absence VISIBLE.
+  # It cannot be fixed by adding secrets — see header note 5. They must keep
+  # running on the VPS, where the database actually is:
+  #     cd /var/www/invoice && npm run check:all
+  # Never make this a required status check.
+  # --------------------------------------------------------------------------
+  db-invariants:
+    name: db-invariants (cannot run on hosted runners)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report which invariants did not run, and why
+        run: |
+          {
+            echo "### ⏭️ 4 database invariants — NOT RUN (this is NOT a pass)"
+            echo ""
+            echo "| check | what it guards |"
+            echo "| --- | --- |"
+            echo "| \`check:money\` | no unbalanced invoice left unflagged (silent money error) |"
+            echo "| \`check:currency\` | every invoice has a valid ISO-4217 code |"
+            echo "| \`check:review\` | no \`needs_review\` invoice was sent to the accountant |"
+            echo "| \`check:dupes\` | no exact-duplicate rows; unique index actually rejects re-scans |"
+            echo ""
+            echo "**Why they cannot run here:** all four use \`psql\` against"
+            echo "\`DIRECT_URL\`, which is \`postgresql://…@localhost:5432\` — the"
+            echo "Postgres instance is reachable only from the VPS itself, not from"
+            echo "the public internet. No repository secret changes that."
+            echo "\`check:dupes\` additionally issues \`CREATE DATABASE\` /"
+            echo "\`DROP DATABASE\`, so it needs a cluster-admin DSN, which will not"
+            echo "be given to a public repository's CI."
+            echo ""
+            echo "**Where they do run:** on the VPS —"
+            echo "\`cd /var/www/invoice && npm run check:all\`."
+            echo ""
+            echo "**Money, currency, review and duplicate invariants were not"
+            echo "verified by this run.**"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

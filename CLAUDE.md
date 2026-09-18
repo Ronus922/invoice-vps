@@ -120,3 +120,23 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 - הרשימה החיה המלאה נוצרת אוטומטית ב-`/master` (`gen-catalog.sh`) — לעולם לא ידנית, לעולם לא מתיישנת.
 
 ---
+
+## CI — GitHub Actions (`.github/workflows/ci.yml`)
+
+**הריפו `Ronus922/invoice-vps` ציבורי.** אף ערך env, DSN, מפתח או טוקן לא נכנס ל-commit — גם לא בקובץ workflow, גם לא ב"דוגמה". `.env.local` נשאר מקומי בלבד.
+
+רץ על `push` ועל `pull_request`, על runners מתארחים של GitHub (לא self-hosted — runner על ה-VPS היה מריץ קוד מ-forks על שרת הפרודקשן).
+
+| Job | מה הוא בודק | דורש סביבה? |
+|-----|-------------|-------------|
+| `typecheck` | `tsc --noEmit` (אחרי `next typegen` — טיפוסי ה-routes לא ב-git) | לא |
+| `lint` | `eslint .` | לא |
+| `checks` | `check:secrets` + `check:auth` + `check:source` | לא — רצים בלי `pnpm install` |
+| `anon-isolation` | `check:anon` — ה-anon key לא קורא `invoices` / `gmail_tokens` / `scanned_emails` | רשת + 2 secrets |
+| `db-invariants` | **לא רץ.** מדווח אילו בדיקות DB לא רצו ולמה | — |
+
+### `skip` אינו `pass` (קריטי!)
+- `anon-isolation` ו-`db-invariants` יוצאים ב-exit 0 כדי לא לחסום — **וי ירוק שלהם אומר "לא רץ", לא "עבר".** שניהם מדפיסים במפורש ל-log ול-run summary מה לא נבדק. **אסור להוסיף אותם ל-required status checks.**
+- `check:money`, `check:currency`, `check:review`, `check:dupes` **לא יכולים** לרוץ ב-CI: `DIRECT_URL` הוא `localhost:5432` — ה-DB נגיש רק מה-VPS, ו-`check:dupes` גם עושה `CREATE DATABASE`. הם ממשיכים לרוץ על ה-VPS: `npm run check:all`.
+- `check:secrets` ב-CI חלקי: חלק (1) קבצי `.env` במעקב וחלק (3) תבניות מפתח — אמיתיים. חלק (2), השוואה מול הערכים ב-`.env.local`, **לא מבצע כלום ללא הקובץ** ובכל זאת מדפיס ✓. אין להזין את הסודות כ-Actions secrets בריפו ציבורי רק כדי לבדוק שהם לא דלפו — חלק (2) נשאר בדיקה מקומית/VPS.
+- `check:secrets` **אינו** סורק היסטוריית git (רק `git ls-files` + `git grep` על HEAD). `fetch-depth: 0` מוגדר כביטוח לעתיד, לא כדרישה נוכחית.
