@@ -10,14 +10,15 @@
 #    execution by design. Hosted, disposable runners are the only safe option
 #    here — and they are also why the DB checks below cannot run (see 5).
 #
-# 2. fetch-depth: 0 ON THE `checks` JOB.
-#    scripts/check-no-secrets.mjs does NOT scan git history: it uses
-#    `git ls-files` (tracked files at HEAD) and `git grep` (working tree only)
-#    — no `git log --all`, no `rev-list`. So a shallow clone does not defang it
-#    today, and full depth is not strictly required. It is set anyway as cheap
-#    insurance: if the script is ever extended to scan history, a depth-1 clone
-#    would make it pass on ~nothing and look green. Costing a few seconds now
-#    beats a silent false pass later. Every other job keeps the default depth 1.
+# 2. fetch-depth: 0 ON THE `checks` JOB — A HARD REQUIREMENT.
+#    scripts/check-no-secrets.mjs part (4) scans the whole history on every ref:
+#    `git rev-list --objects --all` for .env files that ever existed, and
+#    `git log --all -S` for key-shaped strings that were introduced and later
+#    removed. The repo is public, so a key pushed in one commit and deleted in
+#    the next stays readable in every clone — that is the thing being caught.
+#    A depth-1 clone would leave it nothing to scan, so the script now FAILS on
+#    a shallow repository rather than passing quietly. Do not remove this line.
+#    Every other job keeps the default depth 1.
 #
 # 3. WHY THE JOBS ARE SPLIT THIS WAY.
 #    Each of the ten checks was read and classified by what it actually needs:
@@ -42,15 +43,18 @@
 #    quarantined below, out of any job that should ever gate a merge.
 #
 # 4. check:secrets IS ONLY PARTLY EFFECTIVE ON A CLEAN RUNNER — ON PURPOSE.
-#    The script has three parts. Parts (1) "no .env file is tracked" and (3)
+#    The script has four parts. Parts (1) "no .env file is tracked" and (3)
 #    "no Anthropic key prefix, service-role JWT or private-key header appears in
 #    tracked code" work fully in CI and are real coverage. Those three literal
 #    patterns are deliberately not spelled out in this comment: check:secrets
 #    greps every tracked file, so quoting one here would fail the check itself.
-#    Part (2) — "no literal value from .env.local appears in a tracked file" —
-#    reads those values out of .env.local, which does not exist on a runner.
-#    Verified: on a fresh clone it prints its ✓ line having compared nothing,
-#    which is a silent false pass. It cannot be made real in CI
+#    Part (4) "nothing secret ever entered the history" also works fully here,
+#    which is what fetch-depth: 0 above is for.
+#    Part (2) — "no literal value from .env.local appears in a tracked file or
+#    in the history" — reads those values out of .env.local, which does not
+#    exist on a runner. It therefore prints an explicit SKIPPED, naming what
+#    was not compared, to the log and to $GITHUB_STEP_SUMMARY — never a ✓.
+#    (It used to print ✓ having compared nothing.) It cannot be made real in CI
 #    without storing SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY,
 #    GMAIL_REFRESH_TOKEN, CRON_SECRET and DATABASE_URL as Actions secrets of a
 #    PUBLIC repo — uploading the crown jewels to prove they were not leaked.
@@ -174,7 +178,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       # Partial coverage by design — see header note 4.
-      - name: check:secrets (tracked .env files + key patterns)
+      - name: "check:secrets (tracked .env files + key patterns + full history)"
         run: pnpm run check:secrets
 
       - name: check:auth (no API route without an auth gate)
