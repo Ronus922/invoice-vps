@@ -5,10 +5,19 @@ import { isAllowedEmail } from '@/lib/auth-allowlist'
 import { safeEqual } from '@/lib/safe-compare'
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // Public routes — no auth required.
+  // Exact match, and answered before updateSession: the uptime monitor has no
+  // session to refresh, so a probe must not spend an auth round trip (nor fail
+  // when the auth service is the thing that is down). The handler itself
+  // returns booleans only — see src/app/api/health/route.ts.
+  if (pathname === '/api/health') {
+    return NextResponse.next()
+  }
+
   // Always refresh the session first
   const response = await updateSession(request)
-
-  const { pathname } = request.nextUrl
 
   // Public routes — no auth required
   if (

@@ -12,6 +12,7 @@ import { join } from 'node:path'
 // Routes that are legitimately public. Keep this list tiny and justified.
 const PUBLIC = new Set([
   'src/app/api/auth/logout/route.ts', // only clears a session cookie — safe unauthenticated
+  'src/app/api/health/route.ts', // uptime-monitor probe — no input, no mutation, answers {ok,db} booleans only
 ])
 
 run('check-api-auth', async () => {
