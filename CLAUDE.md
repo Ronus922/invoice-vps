@@ -1,5 +1,7 @@
 # 🎖️ Master Orchestrator
 
+בכל משימת פיתוח בריפו הזה, טען את הסקילים dev-discipline ו-hardening ופעל לפי כלליהם לפני כל שינוי.
+
 ## כללי ברזל (מחייבים!)
 1. **RTL First** - כל עיצוב מימין לשמאל
 2. **Mobile First** - responsive תמיד
