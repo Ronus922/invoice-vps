@@ -12,10 +12,12 @@
 - תהליכים (systemd, לא pm2):
   - `invoice.service`: שרת ה-Next (standalone). מאזין על loopback בלבד, ו-nginx הוא
     היחיד שחשוף החוצה. הפורט נקבע ב-`PORT` בקובץ ה-env של השרת.
-  - `invoice-gmail-scan.timer`: סריקת Gmail יומית, 02:30 UTC
+  - `invoice-gmail-scan.timer`: **מושבת בכוונה** (10/2026, לפי בקשת רונן) — סריקה
+    ידנית בלבד. קבצי ה-unit ו-`scripts/install-gmail-scan-timer.sh` נשארו כדי שאפשר
+    יהיה להחזיר; החזרה רק באישור רונן.
   - `invoice-backup.timer`: גיבוי קבצים ל-Google Drive, ב-1 לכל חודש 03:00 UTC
-  - שני הטיימרים קוראים לאפליקציה עצמה (`/api/scan-gmail`, `/api/backup-to-drive`,
-    באימות `CRON_SECRET`). אם `invoice.service` למטה, גם הם לא ירוצו.
+  - טיימר הגיבוי קורא לאפליקציה עצמה (`/api/backup-to-drive`, באימות `CRON_SECRET`).
+    אם `invoice.service` למטה, הוא לא ירוץ.
 - קובץ env בשרת: לא מתועד כאן (ריפו ציבורי). השירות קורא אותו דרך `EnvironmentFile`
   ב-`invoice.service`. שמות המשתנים: `.env.local.example`.
 - DB: Supabase self-hosted בקונטיינר `supabase-db`, סכמת `public` במסד `postgres`.

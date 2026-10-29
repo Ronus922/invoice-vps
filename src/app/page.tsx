@@ -18,11 +18,6 @@ import { useRouter } from 'next/navigation'
 import { InvoiceEntity } from '@/lib/entities'
 import { createClient } from '@/lib/supabase/client'
 import { parseInvoiceDate } from '@/lib/date-utils'
-import {
-  isFolderWatchSupported,
-  loadFolderHandle,
-  runFolderScan,
-} from '@/lib/folder-watch'
 import StatsCards from '@/components/invoices/StatsCards'
 import UploadZone from '@/components/invoices/UploadZone'
 import InvoicesTable from '@/components/invoices/InvoicesTable'
@@ -120,55 +115,6 @@ export default function InvoicesPage() {
       setUserEmail(data.user?.email ?? '')
     })
   }, [])
-
-  // Auto-scan watched folder while the page is open. Silent if permission
-  // is not granted — re-grant requires the user to click in the dialog.
-  // Throttle lives in localStorage — a useRef reset on every reload used to
-  // re-trigger a scan per page load, overlapping the manual dialog scan.
-  useEffect(() => {
-    if (!isFolderWatchSupported()) return
-
-    const TWELVE_HOURS = 12 * 60 * 60 * 1000
-    const LAST_AUTO_SCAN_KEY = 'folder-watch-last-auto-scan'
-
-    const attempt = async () => {
-      try {
-        const handle = await loadFolderHandle()
-        if (!handle) return
-        const perm = await handle.queryPermission({ mode: 'readwrite' })
-        if (perm !== 'granted') return
-        let last = 0
-        try {
-          last = Number(window.localStorage.getItem(LAST_AUTO_SCAN_KEY) || 0)
-        } catch {
-          /* private mode */
-        }
-        const now = Date.now()
-        if (now - last < TWELVE_HOURS) return
-        // Mark the attempt (not the success) — prevents hot retry loops.
-        try {
-          window.localStorage.setItem(LAST_AUTO_SCAN_KEY, String(now))
-        } catch {
-          /* non-fatal */
-        }
-
-        const list = await InvoiceEntity.list('-created_at')
-        const result = await runFolderScan(handle, list)
-        if (!result) return // another tab/scan holds the lock
-        if (result.created > 0) {
-          refresh()
-        } else {
-          queryClient.invalidateQueries({ queryKey: ['scan-state'] })
-        }
-      } catch {
-        /* silent — user will see errors when they open the dialog */
-      }
-    }
-
-    attempt()
-    const id = setInterval(attempt, 60 * 60 * 1000) // probe hourly
-    return () => clearInterval(id)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredInvoices = invoices.filter((inv) => {
     if (filters.vendor) {
