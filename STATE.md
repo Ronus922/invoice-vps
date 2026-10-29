@@ -1,5 +1,18 @@
 # STATE
 
+## 2026-10-29: סריקה אוטומטית בוטלה
+
+סריקה אוטומטית בוטלה — מייל ותיקייה נסרקים רק בלחיצה ידנית (כפתור בפאנל
+"סריקת מייל" / "סריקת תיקייה").
+
+- **תיקייה:** נמחק ה-`useEffect` של הסריקה האוטומטית (בדיקה בעת טעינה + `setInterval`
+  שעתי + מפתח `folder-watch-last-auto-scan`) מ-`src/app/page.tsx`. `runFolderScan`
+  נקרא עכשיו רק מ-`handleScan` ב-`FolderWatchSettings.tsx`.
+- **מייל:** הטיימר היומי `invoice-gmail-scan.timer` הושבת בשרת (`disable --now`). קבצי
+  ה-unit ו-`scripts/install-gmail-scan-timer.sh` נשארו להחזרה; `invoice-backup.timer`
+  לא שונה.
+- פתיחת פאנל "סריקת מייל" מבצעת רק GET (מידע); ה-POST ל-`/api/scan-gmail` רץ רק מ-`handleScan`.
+
 Branch: `testing/invariant-suite` (from `main`)
 
 ## Status: doc_type identity key added; `npm run check:all` green

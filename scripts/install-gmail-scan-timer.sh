@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# NOTE: the daily Gmail scan timer was disabled intentionally in 10/2026 at
+# Ronen's request — scanning is manual only (button in the UI). The unit files
+# and this installer are kept so the timer can be restored. Do NOT re-run this
+# script without Ronen's explicit approval.
+#
 # Install systemd timer + service for daily Gmail scan.
 # Mirrors the pattern of invoice-backup.{timer,service}.
 # Run once: sudo bash /var/www/invoice/scripts/install-gmail-scan-timer.sh
