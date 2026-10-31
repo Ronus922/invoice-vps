@@ -33,7 +33,9 @@
 #      check:money   psql on public.invoices       — DB (localhost only)
 #      check:currency psql on public.invoices      — DB (localhost only)
 #      check:review  psql on public.invoices       — DB (localhost only)
-#      check:dupes   psql + CREATE/DROP DATABASE   — DB (localhost only), privileged
+#      check:dupes   part 1: psql on public.invoices — DB (localhost only)
+#                    part 2: CREATE/DROP DATABASE   — runs HERE, on a disposable
+#                    Postgres service container (job `dupes-isolated`, see 7)
 #
 #    typecheck and lint are their own jobs so a type error and a lint error are
 #    two distinct red checks, not one. The three environment-free invariant
@@ -61,14 +63,15 @@
 #    We deliberately do not. Part (2) stays a local / VPS check, where .env.local
 #    actually lives. Do not read this job's green as "no secret ever leaked".
 #
-# 5. THE FOUR DB CHECKS CANNOT RUN HERE AT ALL — AND THAT IS NOT A `skip`
-#    WAITING ON SECRETS. DIRECT_URL points at postgresql://…@localhost:5432:
+# 5. THE DB CHECKS ON REAL DATA CANNOT RUN HERE AT ALL — AND THAT IS NOT A
+#    `skip` WAITING ON SECRETS. DIRECT_URL points at postgresql://…@localhost:5432:
 #    the Postgres instance is bound to the VPS itself and is not reachable from
-#    the public internet. No GitHub secret can change that. check:dupes is worse
-#    still — it issues CREATE DATABASE / DROP DATABASE, so it needs a
-#    cluster-admin DSN. Handing that to a public repo's CI is not on the table.
-#    They are surfaced as a permanently-reporting `db-invariants` job rather
-#    than quietly left out, so the gap stays visible in the checks list.
+#    the public internet. No GitHub secret can change that. That covers
+#    check:money, check:currency, check:review and PART 1 of check:dupes (the
+#    read-only audit of the real invoices table, which no migration in this repo
+#    can build — they only ALTER it). They are surfaced as a permanently-
+#    reporting `db-invariants` job rather than quietly left out, so the gap
+#    stays visible in the checks list.
 #
 # 6. `skip` IS NOT `pass`.
 #    The two quarantined jobs exit 0 so they never block, but they print exactly
@@ -76,8 +79,21 @@
 #    on `anon-isolation` or `db-invariants` means "this did not run", not "this
 #    passed". Neither should ever be added to a required-status-check list.
 #
-# BRANCH PROTECTION (not configured here — Ronen's call after a green run):
-#    Candidates for required checks: `typecheck`, `lint`, `checks`.
+# 7. PART 2 OF check:dupes DOES RUN HERE — ON A DISPOSABLE POSTGRES.
+#    The write test needs no app data: no migrations, extensions or schema (it
+#    builds its own 6-column table), only a Postgres it may CREATE/DROP DATABASE
+#    on. The `dupes-isolated` job gives it a service container pinned to the
+#    production major/minor (supabase/postgres 15.8.x -> postgres:15.8). The
+#    script takes that address ONLY from CHECK_DUPES_ISOLATED_URL, never from
+#    DIRECT_URL, and scripts/_lib.mjs isolatedDbUrl() refuses any production
+#    host (*.bios.co.il), any host:port the app is configured with, and
+#    loopback outside GitHub Actions. The container is created per run with
+#    trust auth, so there is no credential to store; the URL below carries no
+#    password. This is a real run, not a skip: unlike `db-invariants` it can
+#    fail, and it is a required status check.
+#
+# BRANCH PROTECTION (ruleset `main-protection`, strict / up to date):
+#    Required: `typecheck`, `lint`, `checks`, `dupes-isolated`.
 #    NOT candidates: `anon-isolation`, `db-invariants`.
 # ============================================================================
 
@@ -246,7 +262,8 @@ jobs:
           pnpm run check:anon
 
   # --------------------------------------------------------------------------
-  # The four database invariants. This job exists to keep their absence VISIBLE.
+  # The database invariants that need the REAL data (money, currency, review
+  # and part 1 of dupes). This job exists to keep their absence VISIBLE.
   # It cannot be fixed by adding secrets — see header note 5. They must keep
   # running on the VPS, where the database actually is:
   #     cd /var/www/invoice && npm run check:all
@@ -259,26 +276,77 @@ jobs:
       - name: Report which invariants did not run, and why
         run: |
           {
-            echo "### ⏭️ 4 database invariants — NOT RUN (this is NOT a pass)"
+            echo "### ⏭️ 4 database invariants on real data — NOT RUN (this is NOT a pass)"
             echo ""
             echo "| check | what it guards |"
             echo "| --- | --- |"
             echo "| \`check:money\` | no unbalanced invoice left unflagged (silent money error) |"
             echo "| \`check:currency\` | every invoice has a valid ISO-4217 code |"
             echo "| \`check:review\` | no \`needs_review\` invoice was sent to the accountant |"
-            echo "| \`check:dupes\` | no exact-duplicate rows; unique index actually rejects re-scans |"
+            echo "| \`check:dupes\` (part 1) | no exact-duplicate rows in the real table (part 2, the unique-index proof, runs in \`dupes-isolated\`) |"
             echo ""
             echo "**Why they cannot run here:** all four use \`psql\` against"
             echo "\`DIRECT_URL\`, which is \`postgresql://…@localhost:5432\` — the"
             echo "Postgres instance is reachable only from the VPS itself, not from"
             echo "the public internet. No repository secret changes that."
-            echo "\`check:dupes\` additionally issues \`CREATE DATABASE\` /"
-            echo "\`DROP DATABASE\`, so it needs a cluster-admin DSN, which will not"
-            echo "be given to a public repository's CI."
+            echo "Part 2 of \`check:dupes\` (which issues \`CREATE DATABASE\`) does not"
+            echo "need the real database and runs in the \`dupes-isolated\` job on a"
+            echo "disposable Postgres; part 1 needs the real table and cannot."
             echo ""
             echo "**Where they do run:** on the VPS —"
             echo "\`cd /var/www/invoice && npm run check:all\`."
             echo ""
-            echo "**Money, currency, review and duplicate invariants were not"
+            echo "**Money, currency, review and the real-data duplicate audit were not"
             echo "verified by this run.**"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------
+  # check:dupes PART 2 — proves the unique index (partial and full) rejects a
+  # repeated identical insert, allows a different doc_type and grandfathers
+  # legacy rows. Needs no app data, so it runs for real on a disposable
+  # Postgres service container instead of being quarantined (header note 7).
+  #
+  # postgres:15.8 = production's major.minor (supabase/postgres 15.8.x).
+  # POSTGRES_HOST_AUTH_METHOD=trust: a per-run container reachable only from
+  # this runner, so there is no password to store or leak.
+  # --------------------------------------------------------------------------
+  dupes-isolated:
+    name: dupes-isolated
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15.8
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CHECK_DUPES_ISOLATED_URL: postgresql://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Postgres under test is 15.x (same major as production)
+        run: |
+          psql --version
+          v="$(psql "$CHECK_DUPES_ISOLATED_URL" -tAc 'show server_version')"
+          echo "server_version=$v"
+          case "$v" in
+            15.*) ;;
+            *) echo "::error::expected Postgres 15.x like production, got $v"; exit 1 ;;
+          esac
+
+      - name: check:dupes part 2 (throwaway database on the service container)
+        run: pnpm run check:dupes:isolated

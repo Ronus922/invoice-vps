@@ -22,7 +22,7 @@ description: יצירה והחלה של migration ל-DB של InvoiceFlow (Supaba
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.<new_table> TO invoice_app;
   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO invoice_app;
   ```
-- `invoice_app` צריך גם CREATEDB + חברות ב-pg_signal_backend (נדרש ל-`check:dupes` שיוצר DB זמני). אם check:dupes נכשל על הרשאות — זה כנראה זה.
+- `check:dupes` כבר לא יוצר DB זמני על ה-cluster האמיתי (חלק 2 רץ ב-CI על Postgres חד-פעמי), ולכן `invoice_app` לא צריך יותר CREATEDB / pg_signal_backend בשבילו. ההרשאות שהוענקו בעבר לא נשללו; שלילתן היא החלטה של רונן.
 
 ## שלב 3 — החלה
 

@@ -136,10 +136,11 @@ pnpm add zustand next-safe-action @formkit/auto-animate sonner cmdk
 | `checks` | `check:secrets` + `check:auth` + `check:source` | לא — רצים בלי `pnpm install` |
 | `anon-isolation` | `check:anon` — ה-anon key לא קורא `invoices` / `gmail_tokens` / `scanned_emails` | רשת + 2 secrets |
 | `db-invariants` | **לא רץ.** מדווח אילו בדיקות DB לא רצו ולמה | — |
+| `dupes-isolated` | `check:dupes:isolated` — חלק 2 של `check:dupes`: האינדקס הייחודי דוחה כפילות. רץ באמת (יכול להיכשל) על service container של Postgres 15.8, אותה גרסה כמו בפרודקשן | מכולה חד-פעמית בלי סודות |
 
 ### `skip` אינו `pass` (קריטי!)
 - `anon-isolation` ו-`db-invariants` יוצאים ב-exit 0 כדי לא לחסום — **וי ירוק שלהם אומר "לא רץ", לא "עבר".** שניהם מדפיסים במפורש ל-log ול-run summary מה לא נבדק. **אסור להוסיף אותם ל-required status checks.**
-- `check:money`, `check:currency`, `check:review`, `check:dupes` **לא יכולים** לרוץ ב-CI: `DIRECT_URL` הוא `localhost:5432` — ה-DB נגיש רק מה-VPS, ו-`check:dupes` גם עושה `CREATE DATABASE`. הם ממשיכים לרוץ על ה-VPS: `npm run check:all`.
+- `check:money`, `check:currency`, `check:review` וחלק 1 של `check:dupes` (הביקורת על טבלת `invoices` האמיתית) **לא יכולים** לרוץ ב-CI: `DIRECT_URL` הוא `localhost:5432` — ה-DB נגיש רק מה-VPS, ואין ב-repo `CREATE TABLE` שיבנה את הטבלה. הם ממשיכים לרוץ על ה-VPS: `npm run check:all`. חלק 2 של `check:dupes` (`CREATE DATABASE`) רץ ב-CI **רק** על Postgres חד-פעמי: הכתובת באה מ-`CHECK_DUPES_ISOLATED_URL` ולעולם לא מ-`DIRECT_URL`, ו-`isolatedDbUrl()` ב-`scripts/_lib.mjs` מסרב לכל host של פרודקשן (`*.bios.co.il`), לכל host:port שהאפליקציה מוגדרת איתו, ול-loopback מחוץ ל-GitHub Actions. על ה-VPS חלק 2 מדולג במפורש ולא רץ על ה-DB האמיתי.
 - `check:secrets` ב-CI חלקי: חלק (1) קבצי `.env` במעקב, חלק (3) תבניות מפתח וחלק (4) ההיסטוריה — אמיתיים. חלק (2), השוואה מול הערכים האמיתיים, **לא יכול לרוץ ללא הערכים — ומדפיס SKIPPED מפורש, לא ✓**, ב-log וב-run summary, עם פירוט מה לא נבדק. אין להזין את הסודות כ-Actions secrets בריפו ציבורי רק כדי לבדוק שהם לא דלפו — חלק (2) נשאר בדיקה מקומית/VPS.
 - `check:secrets` **סורק את כל ההיסטוריה**, בכל ה-refs — מפתח שנדחף ונמחק בקומיט הבא עדיין גלוי לכל מי שמשכפל ריפו ציבורי. לכן `fetch-depth: 0` ב-job `checks` הוא **דרישה קשיחה, לא ביטוח** — clone רדוד מכשיל את הבדיקה במקום לעבור בשקט.
 - תבניות ההיסטוריה מהודקות יותר משל ה-HEAD (דורשות חומר-מפתח אמיתי) בכוונה: אי-אפשר לתקן היסטוריה בלי rewrite, וצ'ק שלעולם לא יוכל להיות ירוק הוא צ'ק שמתעלמים ממנו. בקומיט הראשון של הריפו יש placeholder כזה בתיעוד שנמחק — לא דלף.
