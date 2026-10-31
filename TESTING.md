@@ -17,7 +17,7 @@
 | `check:money` | `check-money-balanced.mjs` | **שגיאה כספית שקטה** — אין חשבונית לא-מאוזנת (`total≤0`, או `pretax+vat≠total` מעבר לסובלנות `max(0.05, total·0.5%)`) שאינה מסומנת `needs_review`. חוזה המערכת: לא-מאוזן ⟹ needs_review. חשבונית לא-מאוזנת **מסומנת** = תקין. |
 | `check:currency` | `check-currency-valid.mjs` | חשבונית זרה שנשמרה כ-₪ — לכל רשומה קוד מטבע ISO-4217 תקין (`^[A-Z]{3}$`). |
 | `check:review` | `check-needs-review-not-sent.mjs` | שליחת חשבונית לא-מאומתת לרו״ח — אין רשומה עם `needs_review=true` **וגם** `sent_to_accountant_at` מלא, **מלבד** `KNOWN_BACKLOG` מתועד (ראה למטה). כל רגרסיה **חדשה** נכשלת. |
-| `check:dupes` | `check-no-duplicate-invoices.mjs` | כפילות מ-scan חוזר — זהות מסמך היא `(vendor, doc_number, doc_type)`: אין שתי רשומות בעלות מפתח זהה שגם זהות בכל שדה מהותי. כולל הוכחה במסד חד־פעמי ש**האינדקס החלקי** (מגן על נתונים חדשים) וגם **האינדקס המלא** (המצב הסופי) דוחים הכנסה חוזרת זהה, מאפשרים `doc_type` שונה (Invoice מול Receipt עם אותו מספר), וש-החלקי משאיר שורות legacy (לפני העוגן) ללא חסימה. |
+| `check:dupes` | `check-no-duplicate-invoices.mjs` | כפילות מ-scan חוזר — זהות מסמך היא `(vendor, doc_number, doc_type)`: אין שתי רשומות בעלות מפתח זהה שגם זהות בכל שדה מהותי. כולל הוכחה במסד חד־פעמי ש**האינדקס החלקי** (מגן על נתונים חדשים) וגם **האינדקס המלא** (המצב הסופי) דוחים הכנסה חוזרת זהה, מאפשרים `doc_type` שונה (Invoice מול Receipt עם אותו מספר), וש-החלקי משאיר שורות legacy (לפני העוגן) ללא חסימה. חלק 2 (המסד החד־פעמי) רץ ב-CI ב-job `dupes-isolated` על Postgres חד־פעמי (`CHECK_DUPES_ISOLATED_URL`); על ה-VPS הוא מדולג במפורש ולעולם לא רץ על ה-DB האמיתי, וחלק 1 (הביקורת על הנתונים האמיתיים) רץ רק ב-VPS. `npm run check:dupes:isolated` מריץ רק את חלק 2. |
 
 ### הרצה בודדת
 ```bash
@@ -78,7 +78,7 @@ create unique index concurrently invoices_vendor_docnum_doctype_uniq
   on public.invoices (vendor, doc_number, doc_type)
   where coalesce(doc_number,'') <> '';
 ```
-`check:dupes` מוכיח במסד חד־פעמי שגם החלקי וגם המלא דוחים הכנסה חוזרת זהה.
+`check:dupes` מוכיח במסד חד־פעמי שגם החלקי וגם המלא דוחים הכנסה חוזרת זהה. ההוכחה הזו רצה ב-CI (job `dupes-isolated`).
 
 **שורש הבעיה — נסגר:** `folder-watch.ts` בדק כפילות מול snapshot חד-פעמי (עיוור
 לשורה שהוכנסה זה עתה ולמרוץ בין סריקות מקבילות). כעת ה-dedup קורה **ברגע הכתיבה**:
