@@ -8,8 +8,17 @@
 # waits for the app to answer a health check, then probes that src/proxy.ts is
 # actually gating requests. Safe to run from anywhere.
 #
-# Rollback point: the script prints the previous commit before pulling.
-# To roll back:  git reset --hard <previous>  &&  scripts/deploy.sh
+# The "previous commit" the script prints is a reference point, NOT a command to
+# run: it is the working tree's HEAD when the script started (already the new
+# commit if main was pulled by hand first). Use it to see what was live before.
+#
+# To roll back (main is protected, so never reset it):
+#   git revert <merge-commit>   # the commit being undone; squash-merged => an
+#                               # ordinary commit, no -m needed
+#   then open a PR, merge it (gh pr merge --squash --delete-branch), and run
+#   scripts/deploy.sh again.
+# Do NOT `git reset --hard`: the `git pull --ff-only` below would just bring the
+# bad commit back from origin/main.
 #
 set -euo pipefail
 
@@ -35,7 +44,7 @@ fi
 
 # --- Update code -------------------------------------------------------------
 PREVIOUS="$(git rev-parse --short HEAD)"
-echo "→ previous commit: $PREVIOUS (rollback point)"
+echo "→ previous commit: $PREVIOUS (reference only, not a command; to roll back: git revert via PR, see header)"
 git pull --ff-only
 
 # --- Install deps ------------------------------------------------------------

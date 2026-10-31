@@ -30,7 +30,7 @@ bash scripts/deploy.sh
 
 הסקריפט עושה: ff-pull מ-origin → `pnpm install --frozen-lockfile --prod=false` → `pnpm build` (כולל שער lint) → restart ל-`invoice.service` → health check על 127.0.0.1:3002 (עד 30 שניות).
 
-שמור את שורת "previous commit" שהסקריפט מדפיס — זו נקודת ה-rollback.
+שורת "previous commit" שהסקריפט מדפיס היא נקודת ייחוס (מה רץ לפני הפריסה), לא פקודה להרצה. rollback נעשה ב-revert דרך PR, ראה בהמשך.
 
 ## שלב 3 — אימות
 
@@ -43,10 +43,15 @@ bash scripts/deploy.sh
 
 ## Rollback
 
+`main` מוגן, ולכן rollback הוא revert דרך PR ולא איפוס:
+
 ```bash
-git reset --hard <previous>   # ה-commit שהודפס לפני המשיכה
-bash scripts/deploy.sh
+git revert <merge-commit>   # ה-commit שנפרס ומתקן אותו; squash-merge הוא commit רגיל, בלי -m
+# ענף, PR, צ'קים ירוקים, gh pr merge --squash --delete-branch
+bash scripts/deploy.sh      # אחרי המיזוג
 ```
+
+`<merge-commit>` הוא ה-commit שרוצים לבטל, לא ה-"previous commit" שהסקריפט מדפיס (זה רק נקודת ייחוס). אין `git reset --hard`: `deploy.sh` מריץ `git pull --ff-only` ומחזיר את ה-commit הפגום מ-`origin/main`.
 
 ## מוקשים ידועים — אל תיגע
 
