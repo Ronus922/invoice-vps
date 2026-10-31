@@ -5,7 +5,8 @@
 # One-command production deploy for InvoiceFlow. Deploys the current `main`
 # from origin: pulls (fast-forward only), installs deps, builds (which runs
 # the lint gate + prepare-standalone), restarts the systemd service, and
-# waits for the app to answer a health check. Safe to run from anywhere.
+# waits for the app to answer a health check, then probes that src/proxy.ts is
+# actually gating requests. Safe to run from anywhere.
 #
 # Rollback point: the script prints the previous commit before pulling.
 # To roll back:  git reset --hard <previous>  &&  scripts/deploy.sh
@@ -56,15 +57,40 @@ PORT="$(sudo -n grep -oP '^PORT=\K.*' /etc/invoice/invoice.env 2>/dev/null || tr
 PORT="${PORT:-3002}"
 
 echo "→ waiting for http://127.0.0.1:$PORT ..."
+HEALTHY=0
 for i in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
-    NEW="$(git rev-parse --short HEAD)"
-    echo "✓ deploy ok: $PREVIOUS → $NEW"
-    exit 0
+    HEALTHY=1
+    break
   fi
   sleep 1
 done
 
-echo "✗ health check failed after 30s — recent logs:" >&2
-journalctl -u "$UNIT" -n 30 --no-pager >&2
-exit 1
+if [[ "$HEALTHY" -ne 1 ]]; then
+  echo "✗ health check failed after 30s — recent logs:" >&2
+  journalctl -u "$UNIT" -n 30 --no-pager >&2
+  exit 1
+fi
+
+# --- Proxy probe -------------------------------------------------------------
+# The health check above only curls `/`, which answers with or without the
+# proxy, and every /api route re-checks auth itself — so a proxy that silently
+# dropped out of the build would pass both. Neither path below exists, so only
+# the proxy can answer them: 307 (→ /login) for a page, 401 for an /api path.
+# A 404 means the proxy is not running.
+probe_proxy() { # $1 = path, $2 = expected status
+  local got
+  got="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT$1" || true)"
+  if [[ "$got" != "$2" ]]; then
+    echo "✗ proxy probe failed: GET $1 returned ${got:-no response}, expected $2." >&2
+    echo "  src/proxy.ts is not gating requests in the build that is now live — recent logs:" >&2
+    journalctl -u "$UNIT" -n 30 --no-pager >&2
+    exit 1
+  fi
+}
+probe_proxy /zz-proxy-probe 307
+probe_proxy /api/zz-proxy-probe 401
+echo "✓ proxy probe ok (/zz-proxy-probe → 307, /api/zz-proxy-probe → 401)"
+
+NEW="$(git rev-parse --short HEAD)"
+echo "✓ deploy ok: $PREVIOUS → $NEW"
