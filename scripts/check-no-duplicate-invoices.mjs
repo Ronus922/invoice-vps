@@ -8,18 +8,34 @@
 //   source, doc_type) are a re-scan artifact — accounting sees one expense twice.
 //
 // Two parts:
-//   1. Read-only audit of the REAL DB — no exact-duplicate groups may exist.
+//   1. Read-only audit of the REAL DB (DIRECT_URL) — no exact-duplicate groups
+//      may exist. VPS only: it needs the real data, which CI cannot reach.
 //   2. Write test on a THROWAWAY database (created + dropped here, never the
 //      real data) proving BOTH the partial index (protecting new data now) and
 //      the eventual full index reject a repeated identical insert, allow a
 //      genuinely different document (different doc_type), and — for the partial
 //      index — leave legacy rows (before the anchor) untouched.
+//      It needs nothing from the app (no migrations, extensions or schema — it
+//      builds its own 6-column table) but a Postgres it may create databases
+//      on. That Postgres comes ONLY from CHECK_DUPES_ISOLATED_URL — the CI
+//      `dupes-isolated` job's service container — and never from DIRECT_URL;
+//      isolatedDbUrl() refuses anything that is or could be production. On the
+//      VPS the variable is unset, so part 2 is SKIPPED (loudly, not as a ✓).
+//
+// Usage: node scripts/check-no-duplicate-invoices.mjs [--part=1|2]  (default: both)
 //
 // NOTE: legitimately-distinct documents sharing (vendor, doc_number, doc_type)
 // but differing in content (a re-scan/rename twin, manual-vs-folder) are NOT
 // exact duplicates — surfaced here as info for human resolution, not a failure.
 // See TESTING.md.
-import { run, psql, scalar, fail, ok, info } from './_lib.mjs'
+import { run, psql, scalar, fail, ok, info, isolatedDbUrl } from './_lib.mjs'
+
+const PART = (process.argv.find((a) => a.startsWith('--part=')) ?? '--part=all').slice('--part='.length)
+if (!['1', '2', 'all'].includes(PART)) {
+  console.error(`unknown --part=${PART} (use --part=1, --part=2, or omit for both)`)
+  process.exit(2)
+}
+const ISOLATED_ENV = 'CHECK_DUPES_ISOLATED_URL'
 
 const SIG = `md5(
   coalesce(total::text,'')||'|'||coalesce(pretax::text,'')||'|'||coalesce(vat::text,'')||'|'||
@@ -27,7 +43,7 @@ const SIG = `md5(
   coalesce(payment_method,'')||'|'||coalesce(category,'')||'|'||coalesce(file_name,'')||'|'||
   coalesce(source,'')||'|'||coalesce(doc_type,''))`
 
-run('check-no-duplicate-invoices', async () => {
+function auditRealDb() {
   // --- Part 1: real DB must have no exact-duplicate rows -------------------
   const exactDupRows = scalar(`
     with s as (
@@ -52,12 +68,35 @@ run('check-no-duplicate-invoices', async () => {
   if (variantGroups !== '0') {
     info(`${variantGroups} קבוצות (vendor, doc_number, doc_type) עם וריאנטים — ממתינות להכרעה ידנית ב-UI (לא כשל)`)
   }
+}
 
+async function isolatedWriteTest() {
   // --- Part 2: prove the prevention mechanism on a throwaway DB -----------
-  // Real data lives in database "postgres"; this creates a SEPARATE database on
-  // the same cluster, fully isolated, and drops it in finally.
-  const admin = process.env.DIRECT_URL
-  if (!admin) return fail('אין DIRECT_URL — לא ניתן להריץ בדיקת כתיבה מבודדת')
+  // A SEPARATE database on a disposable cluster, fully isolated, dropped in
+  // finally. The cluster is never the real one — see the header.
+  if (PART === 'all' && !process.env[ISOLATED_ENV]) {
+    info(`⏭ חלק 2 (DB חד"פ) דולג — ${ISOLATED_ENV} לא מוגדר. הוא רץ ב-CI (job dupes-isolated) ולעולם לא על ה-DB האמיתי. זה לא ✓: חלק 2 לא נבדק בהרצה הזו.`)
+    return
+  }
+  let admin
+  try {
+    admin = isolatedDbUrl(ISOLATED_ENV)
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err))
+  }
+  if (new URL(admin).pathname.length <= 1) return fail(`${ISOLATED_ENV} חייב לכלול שם מסד (…/postgres)`)
+  const adminSql = (sql) => psql(sql, { url: admin, args: ['-c'] })
+  const adminScalar = (sql) => scalar(sql, { url: admin })
+
+  // Last line of defence, after the textual guard: a disposable cluster holds
+  // no databases besides the defaults and has no invoices table. The real
+  // cluster has both. Catalog reads only; nothing is created before this passes.
+  const foreignDbs = adminScalar(`select count(*) from pg_database where datname not in ('postgres','template0','template1')`)
+  const hasInvoices = adminScalar(`select to_regclass('public.invoices') is not null`)
+  if (foreignDbs !== '0' || hasInvoices === 't') {
+    return fail(`${ISOLATED_ENV} מצביע על cluster שאינו חד-פעמי (יש בו מסדים נוספים או טבלת invoices) — מסרב ליצור בו מסד`)
+  }
+  info(`חלק 2 רץ על Postgres ${adminScalar('show server_version')} חד-פעמי`)
   const tmpName = `invoice_check_${process.pid}_${Date.now()}`
   const tmpUrl = admin.replace(/\/[^/?]+(\?|$)/, `/${tmpName}$1`)
 
@@ -78,7 +117,7 @@ run('check-no-duplicate-invoices', async () => {
     }
   }
 
-  psql(`create database "${tmpName}"`, { args: ['-c'] })
+  adminSql(`create database "${tmpName}"`)
   try {
     psql(
       `create table invoices (
@@ -135,7 +174,12 @@ run('check-no-duplicate-invoices', async () => {
     else fail('DB חד"פ (מלא): unique index חוסם doc_type שונה לגיטימי')
   } finally {
     // WITH (FORCE) drops even if a session is still closing (PG 13+).
-    psql(`drop database if exists "${tmpName}" with (force)`, { args: ['-c'] })
+    adminSql(`drop database if exists "${tmpName}" with (force)`)
     info('DB חד"פ נמחק')
   }
+}
+
+run('check-no-duplicate-invoices', async () => {
+  if (PART !== '2') auditRealDb()
+  if (PART !== '1') await isolatedWriteTest()
 })
