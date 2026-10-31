@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  experimental: {
+    // With a proxy.ts present Next buffers every request body (default 10MB) and
+    // silently truncates the rest — no error, the route just gets a partial body.
+    // Keep equal to MAX_FILE_SIZE in src/app/api/upload/route.ts (and nginx's
+    // client_max_body_size) so an upload the route accepts is never cut short.
+    proxyClientMaxBodySize: '20mb',
+  },
   async headers() {
     return [
       {
