@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: סוקר אבטחה לשינויים ב-API routes, middleware, אימות, סודות והרשאות DB של InvoiceFlow. הפעל אותו על כל שינוי ב-src/app/api, src/middleware.ts, או קוד שנוגע ב-OAuth/סודות.
+description: סוקר אבטחה לשינויים ב-API routes, proxy (לשעבר middleware), אימות, סודות והרשאות DB של InvoiceFlow. הפעל אותו על כל שינוי ב-src/app/api, src/proxy.ts, או קוד שנוגע ב-OAuth/סודות.
 tools: Read, Grep, Glob, Bash
 ---
 

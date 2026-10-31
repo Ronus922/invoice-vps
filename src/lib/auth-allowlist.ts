@@ -2,7 +2,7 @@
 // they authenticated (Google OAuth or email/password).
 // Default locks to r@bios.co.il with zero config; override via ALLOWED_EMAILS
 // (comma-separated) without a code change.
-// ponytail: single source of truth, checked in callback + middleware (defense in depth)
+// ponytail: single source of truth, checked in callback + proxy (defense in depth)
 // `||` (not `??`) so an accidental empty ALLOWED_EMAILS='' still falls back to
 // the default instead of locking everyone out.
 const ALLOWED = (process.env.ALLOWED_EMAILS || 'r@bios.co.il')

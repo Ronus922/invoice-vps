@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
 // PUBLIC BY DESIGN — the uptime-monitor probe (UptimeRobot), listed in the
-// PUBLIC set of scripts/check-api-auth.mjs and exempted in src/middleware.ts.
+// PUBLIC set of scripts/check-api-auth.mjs and exempted in src/proxy.ts.
 // It takes no input, mutates nothing, and answers with two booleans only.
 // Never add detail here (versions, paths, table/account names, error text):
 // this body is world-readable.

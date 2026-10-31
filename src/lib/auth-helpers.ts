@@ -4,8 +4,8 @@ import { isAllowedEmail } from '@/lib/auth-allowlist'
 import type { User } from '@supabase/supabase-js'
 
 // Returns the user only if they are both authenticated AND on the allowlist.
-// Enforcing the allowlist here (not just in middleware) means every API route —
-// all of which call this — is gated independently of the middleware matcher.
+// Enforcing the allowlist here (not just in the proxy) means every API route —
+// all of which call this — is gated independently of the proxy matcher.
 export async function getAuthenticatedUser(): Promise<User | null> {
   const supabase = await createClient()
   const { data } = await supabase.auth.getUser()

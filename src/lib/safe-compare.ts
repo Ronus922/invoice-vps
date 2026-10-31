@@ -1,6 +1,7 @@
-// Constant-time string equality, safe for both the edge runtime (middleware —
-// no node:crypto.timingSafeEqual) and node. Compares the full length regardless
-// of mismatch position; a length difference folds into the result.
+// Constant-time string equality, safe for both the edge runtime (no
+// node:crypto.timingSafeEqual) and node — written for the edge middleware, and
+// kept as is now that src/proxy.ts runs on node. Compares the full length
+// regardless of mismatch position; a length difference folds into the result.
 export function safeEqual(a: string, b: string): boolean {
   const len = Math.max(a.length, b.length)
   let diff = a.length ^ b.length

@@ -4,7 +4,7 @@ import { createServerClient } from '@supabase/ssr'
 import { isAllowedEmail } from '@/lib/auth-allowlist'
 import { safeEqual } from '@/lib/safe-compare'
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Public routes — no auth required.
