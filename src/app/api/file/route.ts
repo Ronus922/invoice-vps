@@ -3,7 +3,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { signedUrlFor } from '@/lib/storage'
 
 // Authenticated proxy for viewing/downloading invoice files from the private
-// bucket. Gated by middleware (allowlist) + getAuthenticatedUser, then redirects
+// bucket. Gated by the proxy (allowlist) + getAuthenticatedUser, then redirects
 // to a short-lived signed URL. ?u = the stored file_url (legacy public URL or path).
 export async function GET(request: NextRequest) {
   const user = await getAuthenticatedUser()
