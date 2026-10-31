@@ -53,8 +53,9 @@
    לטיימרים: `journalctl -u invoice-gmail-scan.service -n 50` / `journalctl -u invoice-backup.service -n 50`.
 3. Sentry: יש אירוע חדש שמסביר את התקלה? אם Sentry MCP מחובר, שואלים דרכו.
 4. פריסה אחרונה חשודה: revert דרך PR (`main` מוגן, אין push ישיר), merge, ואז
-   `bash scripts/deploy.sh`. לעולם לא `git reset --hard` על פרוד, גם לא לפי ההערה
-   בראש `deploy.sh`: הסקריפט מריץ `git pull --ff-only` ומחזיר את הקומיט מ-`origin/main`.
+   `bash scripts/deploy.sh`. לעולם לא `git reset --hard` על פרוד: הסקריפט מריץ
+   `git pull --ff-only` ומחזיר את הקומיט מ-`origin/main`. ה-"previous commit" ש-`deploy.sh`
+   מדפיס הוא נקודת ייחוס, לא פקודה להרצה.
 5. DB פגוע: שחזור לפי נוהל הגיבוי (סעיף גיבויים), **קודם ל-DB בדיקה**. שחזור על פרוד
    רק עם גיבוי טרי ואישור מפורש של רונן.
 6. כל פעולה שמשנה מצב מדווחת לרונן לפני ביצוע. עצירת התהליך: `sudo systemctl stop invoice.service`
