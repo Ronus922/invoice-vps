@@ -21,6 +21,14 @@
 - קובץ env בשרת: לא מתועד כאן (ריפו ציבורי). השירות קורא אותו דרך `EnvironmentFile`
   ב-`invoice.service`. שמות המשתנים: `.env.local.example`.
 - DB: Supabase self-hosted בקונטיינר `supabase-db`, סכמת `public` במסד `postgres`.
+- התפקיד `invoice_app` (ה-`DIRECT_URL` של סקריפטי `check:*` והסקריפטים החד-פעמיים)
+  **בלי `CREATEDB`** מאז 31/10/2026.
+  - למה: האפליקציה עצמה לא מתחברת איתו (אין בקוד לקוח Postgres ישיר, היא עובדת מול
+    Supabase דרך REST). הבדיקה היחידה שיצרה מסד, `check:dupes` חלק 2, עברה ל-CI על
+    Postgres חד-פעמי. אין סיבה שתפקיד של האפליקציה יוכל ליצור מסדים בקלאסטר המשותף.
+  - נשארו לו `BYPASSRLS` והחברות ב-`pg_signal_backend`. אלה לא נבדקו במסגרת השינוי.
+  - צריך מסד זמני? מריצים אותו על Postgres חד-פעמי, לא על `supabase-db`.
+    החזרה (רק באישור רונן): `ALTER ROLE invoice_app CREATEDB;` כ-`postgres`.
 - מיגרציות: **מנגנון אחר, לא dbmate** (סעיף 7 בתבנית ההקשחה; החלטת רונן, 11/10/2026).
   קובצי SQL ב-`supabase/migrations/` מוחלים ידנית כ-`postgres`:
   `docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < supabase/migrations/<file>.sql`.
@@ -68,6 +76,22 @@
   לפני PR מריצים `pnpm check:all` על השרת, כי ארבע בדיקות ה-DB לא רצות ב-CI.
 - אימות: `deploy.sh` מחכה עד 30 שניות לתשובה מהאפליקציה אחרי ה-restart. אימות
   BUILD_ID (build מוגש = build בדיסק) ובדיקת `/api/health` בתוך הסקריפט: טרם הוגדרו.
+- **בדיקת עשן מאומתת אחרי פריסה (משתמש בדיקה) לא נבנתה, בכוונה (31/10/2026).**
+  באפליקציה אין רמות הרשאה: כל משתמש שנמצא ב-`ALLOWED_EMAILS` מקבל גישה מלאה (קריאה,
+  כתיבה, מחיקה, העלאה, סריקה, גיבוי ושליחה לרו"ח). משתמש בדיקה ייעודי עם סיסמה בקובץ
+  על השרת היה מפתח ראשי לכל הנתונים.
+  - במקום זה: אחרי שדרוג framework או שינוי ב-auth, בדיקה ידנית בדפדפן: התחברות,
+    רשימת החשבוניות, ההגדרות, ומצב הגיבוי ל-Drive (צפייה בלבד, בלי להפעיל גיבוי).
+  - מה כן אוטומטי ב-`deploy.sh`: health ובדיקת ה-proxy (`/zz-proxy-probe` מחזיר 307,
+    `/api/zz-proxy-probe` מחזיר 401). שתיהן בלי התחברות, ולכן לא מוכיחות שמשתמש
+    מחובר רואה נתונים.
+  - ההחלטה תיבדק מחדש אם תתווסף שכבת הרשאות (למשל צפייה בלבד).
+- **ה-job `dupes-isolated` תלוי ב-Docker Hub.** הוא required ב-ruleset של `main`
+  ומושך את ה-image `postgres:15.8`. נפל בגלל משיכת image (שגיאת pull, rate limit או
+  תקלה ב-Docker Hub, לפני שהבדיקה עצמה התחילה): **Re-run** של ה-job
+  (`gh run rerun <run-id> --failed`, או הכפתור ב-GitHub), לא bypass. ל-ruleset אין
+  bypass, ולא מסירים את הצ'ק מרשימת ה-required. נפל אחרי שה-Postgres עלה: זה כשל
+  אמיתי של האינדקס הייחודי, וחוקרים אותו.
 - **לא בונים בתיקיית האפליקציה מענף אחר.** השירות מגיש ישירות מ-`.next/standalone`
   שלה, ו-build שם מחליף את מה שרץ. בדיקת build של ענף: `git worktree add` לתיקייה
   זמנית, ובונים שם.
