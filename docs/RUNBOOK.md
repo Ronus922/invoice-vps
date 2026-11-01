@@ -131,8 +131,9 @@
   ExecStart=/opt/node-24/bin/node /var/www/invoice/.next/standalone/server.js
   ```
 
-  אימות: `readlink -f /proc/$(systemctl show -p MainPID --value invoice.service)/exe` מחזיר
-  נתיב תחת `/opt/node-v24...`.
+  אימות: `sudo readlink -f /proc/$(systemctl show -p MainPID --value invoice.service)/exe` מחזיר
+  נתיב תחת `/opt/node-v24...`. חייבים `sudo`: השירות רץ עם `Group=devops-www`, ולכן משתמש ה-deploy
+  מקבל `Permission denied` על `/proc/<pid>/exe` שלו (`deploy.sh` משתמש באותה דרך).
 - **עדכון patch** (24.x.y חדש; הגרסה מ-<https://nodejs.org/dist/index.json>, רק שורת 24, תמיד מקובעת ולא latest):
 
   ```bash

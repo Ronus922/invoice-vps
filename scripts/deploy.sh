@@ -108,10 +108,16 @@ fi
 # --- Runtime Node check ------------------------------------------------------
 # The build ran on Node 24, so the service must too. Without the systemd drop-in
 # the unit would quietly fall back to the system node, so ask the live process.
+# The unit runs with Group=devops-www, so the deploy user cannot read
+# /proc/<pid>/exe (Permission denied): read it through sudo, and fall back to the
+# process's own command line (world-readable) if sudo is not available.
 MAINPID="$(systemctl show -p MainPID --value "$UNIT")"
-LIVE_EXE="$(readlink -f "/proc/$MAINPID/exe" 2>/dev/null || true)"
+LIVE_EXE="$(sudo -n readlink -f "/proc/$MAINPID/exe" 2>/dev/null || true)"
+if [[ -z "$LIVE_EXE" ]]; then
+  LIVE_EXE="$(tr '\0' '\n' < "/proc/$MAINPID/cmdline" 2>/dev/null | head -n 1 || true)"
+fi
 case "$LIVE_EXE" in
-  "$(readlink -f "$NODE_PREFIX")"/bin/node) ;;
+  "$NODE_PREFIX/bin/node"|"$(readlink -f "$NODE_PREFIX")/bin/node") ;;
   *)
     echo "✗ $UNIT (pid ${MAINPID:-?}) runs '${LIVE_EXE:-unknown}', expected $NODE_PREFIX/bin/node." >&2
     echo "  is the drop-in /etc/systemd/system/invoice.service.d/node24.conf installed and daemon-reloaded? (docs/RUNBOOK.md)" >&2
