@@ -8,6 +8,11 @@
 # waits for the app to answer a health check, then probes that src/proxy.ts is
 # actually gating requests. Safe to run from anywhere.
 #
+# Node: the app builds and runs on its own Node 24 in /opt/node-24, never on the
+# shared system node (which other apps on this host use). The script refuses to
+# run on anything else, and checks the live process after the restart. Setup and
+# the Node 20 rollback are in docs/RUNBOOK.md (Node).
+#
 # The "previous commit" the script prints is a reference point, NOT a command to
 # run: it is the working tree's HEAD when the script started (already the new
 # commit if main was pulled by hand first). Use it to see what was live before.
@@ -27,6 +32,25 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 UNIT="invoice.service"
+
+# --- Node --------------------------------------------------------------------
+# InvoiceFlow has its own Node 24 (NODE_PREFIX is a symlink to a pinned versioned
+# directory). The build, the lint gate and pnpm must use the same Node the service
+# runs on; the systemd drop-in invoice.service.d/node24.conf points the unit at it.
+# pnpm is the corepack shim in that same bin dir, so its version comes from the
+# `packageManager` field. PATH is changed for this script only.
+NODE_PREFIX="/opt/node-24"
+export PATH="$NODE_PREFIX/bin:$PATH"
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+if [[ "$(command -v node || true)" != "$NODE_PREFIX/bin/node" || "$(node -v 2>/dev/null || true)" != v24.* ]]; then
+  echo "✗ expected Node v24 from $NODE_PREFIX/bin, got '$(command -v node || echo none) $(node -v 2>&1 || true)' — see docs/RUNBOOK.md (Node)" >&2
+  exit 1
+fi
+if [[ "$(command -v pnpm || true)" != "$NODE_PREFIX/bin/pnpm" ]]; then
+  echo "✗ pnpm must be the corepack shim in $NODE_PREFIX/bin, got '$(command -v pnpm || echo none)' — see docs/RUNBOOK.md (Node)" >&2
+  exit 1
+fi
+echo "→ node $(node -v), pnpm $(pnpm -v)"
 
 # --- Safety checks -----------------------------------------------------------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -80,6 +104,22 @@ if [[ "$HEALTHY" -ne 1 ]]; then
   journalctl -u "$UNIT" -n 30 --no-pager >&2
   exit 1
 fi
+
+# --- Runtime Node check ------------------------------------------------------
+# The build ran on Node 24, so the service must too. Without the systemd drop-in
+# the unit would quietly fall back to the system node, so ask the live process.
+MAINPID="$(systemctl show -p MainPID --value "$UNIT")"
+LIVE_EXE="$(readlink -f "/proc/$MAINPID/exe" 2>/dev/null || true)"
+case "$LIVE_EXE" in
+  "$(readlink -f "$NODE_PREFIX")"/bin/node) ;;
+  *)
+    echo "✗ $UNIT (pid ${MAINPID:-?}) runs '${LIVE_EXE:-unknown}', expected $NODE_PREFIX/bin/node." >&2
+    echo "  is the drop-in /etc/systemd/system/invoice.service.d/node24.conf installed and daemon-reloaded? (docs/RUNBOOK.md)" >&2
+    echo "  the new build is already live, so fix the unit and restart, or roll back as described in the RUNBOOK." >&2
+    exit 1
+    ;;
+esac
+echo "✓ $UNIT runs on $("$LIVE_EXE" -v) ($LIVE_EXE)"
 
 # --- Proxy probe -------------------------------------------------------------
 # The health check above only curls `/`, which answers with or without the
