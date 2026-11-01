@@ -109,12 +109,15 @@ fi
 # The build ran on Node 24, so the service must too. Without the systemd drop-in
 # the unit would quietly fall back to the system node, so ask the live process.
 # The unit runs with Group=devops-www, so the deploy user cannot read
-# /proc/<pid>/exe (Permission denied): read it through sudo, and fall back to the
-# process's own command line (world-readable) if sudo is not available.
+# /proc/<pid>/exe (Permission denied): read it through sudo. Without sudo the live
+# process cannot be inspected (Next rewrites the process title to "next-server
+# (v...)", so /proc/<pid>/cmdline does not show the binary either); then settle for
+# the binary the unit was just started with, which is what the restart used.
 MAINPID="$(systemctl show -p MainPID --value "$UNIT")"
 LIVE_EXE="$(sudo -n readlink -f "/proc/$MAINPID/exe" 2>/dev/null || true)"
 if [[ -z "$LIVE_EXE" ]]; then
-  LIVE_EXE="$(tr '\0' '\n' < "/proc/$MAINPID/cmdline" 2>/dev/null | head -n 1 || true)"
+  echo "! cannot read /proc/$MAINPID/exe without sudo; checking the unit's ExecStart instead" >&2
+  LIVE_EXE="$(systemctl show -p ExecStart --value "$UNIT" | grep -oE 'path=[^ ;]+' | head -n 1 | cut -d= -f2 || true)"
 fi
 case "$LIVE_EXE" in
   "$NODE_PREFIX/bin/node"|"$(readlink -f "$NODE_PREFIX")/bin/node") ;;
