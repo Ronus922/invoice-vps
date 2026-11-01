@@ -38,6 +38,22 @@
       "allowedVersions": "<25"
     },
     {
+      "description": "Deferred on purpose: @anthropic-ai/sdk 1.x moves the Messages API to API version 2026-10-21 and sends the key as an Authorization header. No code impact found, but it is the invoice-extraction path and cannot be exercised without a live call on the production key. Return condition: docs/RUNBOOK.md, section on deferred upgrades",
+      "matchPackageNames": ["@anthropic-ai/sdk"],
+      "allowedVersions": "<1"
+    },
+    {
+      "description": "Deferred on purpose: TypeScript 7 breaks lint (typescript-eslint peer range is <6.1.0, eslint-config-next throws at load). Return condition: docs/RUNBOOK.md, section on deferred upgrades",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "Deferred on purpose: pnpm 11+ is a toolchain migration (the pnpm field in package.json is no longer read, strictDepBuilds, minimumReleaseAge, verifyDepsBeforeRun), not a bump. The 10.34 line is still patched. Return condition: docs/RUNBOOK.md, section on deferred upgrades",
+      "matchDepNames": ["pnpm"],
+      "matchDepTypes": ["packageManager"],
+      "allowedVersions": "<11"
+    },
+    {
       "description": "react and react-dom must move together, in their own PR",
       "matchPackageNames": ["react", "react-dom"],
       "groupName": "react",

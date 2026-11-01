@@ -3,8 +3,9 @@
 נוהל תגובה לתקלה. שמות משתנים ושמות שירותים בלבד, בלי ערכי סודות.
 שדה שעוד לא ידוע כתוב "טרם הוגדר".
 הריפו ציבורי, ולכן אין כאן נתיבי שרת וכתובות פנימיות. הם בקובץ ה-env של השרת
-ובהגדרות ה-systemd, לא בגיט. החריג היחיד הוא נתיבי ה-Node (סעיף Node), כי `/opt/node-24`
-כתוב גם ב-`scripts/deploy.sh`.
+ובהגדרות ה-systemd, לא בגיט. החריגים: נתיבי ה-Node (סעיף Node), כי `/opt/node-24`
+כתוב גם ב-`scripts/deploy.sh`, ונתיבי העותקים של שינויי שרת (`/var/backups/invoice-*`), כדי שאפשר
+יהיה לחזור אחורה.
 
 ## זהות
 
@@ -55,6 +56,16 @@
   - `200 {"ok":true,"db":true}`: תקין
   - `503 {"ok":false,"db":false}`: ה-DB לא מגיב תוך 5 שניות
   - `502` / `504` מ-nginx: התהליך למטה או תקוע
+  - `429` מ-nginx: עברו את המגבלה (ראו הבא)
+- הגבלת קצב ב-nginx על `/api/health` (נוספה 1/11/2026): `limit_req` ב-site של invoice בלבד,
+  על `location = /api/health` בלבד. זון בשם `invoice_health`, 10 בקשות בשנייה ל-IP, `burst=20 nodelay`,
+  וחריגה מחזירה `429`. מוניטור של 5 דקות רחוק מאוד מהמגבלה.
+  - נבדק: 40 בקשות מקבילות נתנו 22 × `200` ו-18 × `429`, ובקשה 3 שניות אחר כך חזרה ל-`200`.
+    `/login`, `/zz-proxy-probe` ו-`/api/zz-proxy-probe` לא הושפעו (200 / 307 / 401).
+  - עותק של קובץ ה-site מלפני השינוי: `/var/backups/invoice-nginx/invoice.before-limit-req`.
+    החזרה: `sudo cp -p` של העותק לקובץ ה-site (הוא קובץ רגיל, לא symlink), `sudo nginx -t`,
+    `sudo systemctl reload nginx`. אל תחליפו אותו ב-symlink מ-`sites-available`: שם חסרה
+    `client_max_body_size 20M` והעלאות מעל 1MB ייכשלו.
 - UptimeRobot: מוניטור "invoice-vps health" (טרם הוגדר)
   - HTTP(s), URL: `https://invoice.bios.co.il/api/health`
   - אינטרוול 5 דקות, התרעה על כל סטטוס שאינו 200, איש קשר: מייל מאומת
@@ -65,6 +76,10 @@
     בעצמם לא מגיעים ל-Sentry, רק ל-journal.
   - Sentry MCP: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp/bios-s2/invoice-vps`
     ואז `/mcp` ו-Authenticate (OAuth של רונן).
+  - מצב ב-1/11/2026: `SENTRY_DSN` מוגדר בשרת, והשורה "Sentry initialized" מופיעה בכל עלייה. @sentry/nextjs 11
+    רץ עם `dataCollection: { userInfo: false }` ב-`src/instrumentation.ts`: בלי IP של הלקוח ובלי
+    `x-forwarded-for` באירועים (v11 אוסף אותם כברירת מחדל, v10 לא). כותרות cookie, authorization ו-secret
+    מסוננות על ידי v11 עצמו. סגירת (Resolve) אירוע הבדיקה הפתוח ב-Sentry נשארה לרונן, כי אין בסביבה טוקן עם הרשאה לכך.
 
 ## תגובה לקריסה
 
@@ -158,6 +173,10 @@
   4. אימות: `curl -s http://127.0.0.1:3002/api/health` מחזיר `{"ok":true,"db":true}`, והתהליך החי
      רץ מ-`/usr/bin/node`.
 
+  **שמירת העותק:** `/var/backups/invoice-node20/` (עותק היחידה המקורית ו-main לפני המעבר) נשאר. אפשר למחוק אותו
+  ב-**1/12/2026** או אחריו, אם עד אז לא היה rollback ל-Node 20 (30 יום של יציבות מאז 1/11/2026).
+  אותו תאריך חל על `/var/backups/invoice-nginx/`.
+
   חירום, כשאין זמן ל-PR: מבצעים רק את שלב 2 ואחריו `sudo systemctl restart invoice.service`. ה-build של Node 24
   רץ בלי בעיה על Node 20 (כל המודולים הנייטיב הם N-API עם בינאריים מוכנים), ואת ה-PR מסיימים אחרי.
 
@@ -171,8 +190,87 @@
 - עותק נוסף של הקבצים: `invoice-backup.timer` שולח חודשית ל-Google Drive.
 - **תלות:** הגיבוי של הפרויקט הזה נשען כולו על `billing-backup.service`. שינוי או
   השבתה שם מפסיקים גם את הגיבוי כאן. הנוהל המלא: `docs/backup.md` בריפו almogbilling.
-- דריל: טרם הוגדר לפרויקט הזה. שחזור ידני לקונטיינר זמני, עם הסקריפט של billing:
-  `RESTORE_DB=postgres VERIFY_TABLES="public.invoices public.gmail_tokens public.scanned_emails" scripts/backup/pg-restore.sh --keep <cluster-dump>`
-  (מתוך ריפו almogbilling, כ-root; `--keep` לפני הקובץ). משווים את הספירות מול הפרוד.
+- התראה על כשל בגיבוי (נוסף 1/11/2026): ל-`invoice-backup.service` יש drop-in עם
+  `OnFailure=billing-alert@%n.service`. זו אותה יחידת התראה משותפת של billing שמשרתת גם את הגיבויים של
+  guesthub ו-rentbook: מייל ו-WhatsApp למנהל, כל ערוץ בנפרד. `billing-alert@.service` עצמה לא שונתה.
+  - נבדק בכשל מדומה: יחידה זמנית (`ExecStart=/bin/false`, עם אותו `OnFailure`) בתיקיית ה-runtime של systemd,
+    ו-`ALERT_TEST_MODE=1` דרך drop-in זמני על המופע של ההתראה בלבד (לא על התבנית המשותפת). שני הערוצים נשלחו. היחידה, ה-drop-in וקובץ
+    ה-env הזמניים נמחקו, ו-`daemon-reload` רץ אחרי המחיקה.
+  - התלות: אם `billing-alert@.service` או הגדרות ה-SMTP/WhatsApp של billing יושבתו, ההתראה על הגיבוי של
+    invoice תיעלם בשקט. `invoice.service` עצמו **לא** מחובר ל-`OnFailure`: כל restart מסתיים ב-`status=143`
+    ביחידה הישנה והיה מפעיל אותו בכל פריסה.
+- תרגיל שחזור (בוצע 1/11/2026, שחזור ידני לקונטיינר חד-פעמי עם הסקריפט של billing, מתוך ריפו almogbilling כ-root):
+  `sudo env RESTORE_CONTAINER=invoice-restore-drill RESTORE_PORT=55440 RESTORE_DB=postgres VERIFY_TABLES="public.invoices public.gmail_tokens public.scanned_emails" bash scripts/backup/pg-restore.sh --keep <cluster-dump>`
+  - **הקלט:** ה-dump היומי האחרון מסוג `cluster-*` (נלקח ב-1/11/2026 03:06 UTC, כ-82MB דחוס), על התמונה
+    `supabase/postgres:15.8.1.085`, אותה גרסה כמו הפרודקשן.
+  - **זמן:** 60 שניות מהפעלת הקונטיינר ועד `RESTORE OK` (21:59:25 עד 22:00:25 UTC).
+  - **ספירות:** `public.invoices` 1003 מול 1012 בפרוד (בפרוד נוספו 9 חשבוניות אחרי שעת ה-dump:
+    1003 + 9 = 1012), `public.gmail_tokens` 1 מול 1, `public.scanned_emails` 1062 מול 1062. 22 טבלאות ב-`public`.
+  - **מיגרציות אחרונות:** כל 7 הסימנים של `20260718` עד `20260730` קיימים אחרי השחזור, זהים לפרוד:
+    העמודות `invoices.doc_type`, `invoices.vat_derived`, `scanned_emails.skipped_attachments`,
+    `scanned_emails.filter_version`, הפונקציה `increment_scan_totals` והאינדקסים
+    `invoices_vendor_docnum_doctype_new_uniq` ו-`invoices_file_url_idx`. אין טבלת ledger למיגרציות,
+    ולכן בודקים לפי תוצר המיגרציה ולא לפי רשומה.
+  - **רעש צפוי:** הסקריפט דיווח 452 שורות שגיאה "לא צפויות". 20 הסוגים השכיחים שהוא מציג הם כולם
+    quirks של סכמות המערכת בתמונה (`auth`, `realtime`, `storage`), ואף אחד מהם לא נוגע ב-`public`. הראיה
+    שהשחזור שלם היא הספירות והסימנים למעלה.
+  - **ניקוי:** `docker rm -f invoice-restore-drill`. לא נשארו volumes, והפורט פנוי.
+  - חוזרים על התרגיל אחרי כל שינוי בגיבוי של billing, ולפחות פעם בחצי שנה. שחזור לפרוד רק באישור מפורש של
+    רונן ועם גיבוי טרי.
 - משמורת מפתח ההצפנה: מפתח ה-restic של billing, במנהל הסיסמאות של רונן (לפי תבנית
   ההקשחה; לא נבדק במסגרת הפרויקט הזה).
+
+## שדרוגים שנדחו בכוונה
+
+שלוש הצעות של Renovate נבדקו ולא מוזגו. לכל אחת יש הגבלה ב-`.github/renovate.json` (`allowedVersions`, עם
+`description` שמפנה לכאן), כדי שלא ייפתח PR חדש עד שתנאי החזרה מתקיימים. כשהתנאי מתקיים מסירים את הכלל.
+
+| חבילה | רצה | נדחה | סיבה | תנאי חזרה |
+|---|---|---|---|---|
+| `@anthropic-ai/sdk` | 0.137.0 | 1.x (1.3.0) | 1.0 מעביר את ה-Messages API לגרסת API `2026-10-21` ושולח את המפתח בכותרת `Authorization` במקום `X-Api-Key`. בשני אתרי הקריאה (`extract-invoice`, `scan-gmail`) ובשני הסקריפטים לא נמצאה השפעה: `tsc` נקי, בדיקת wire מקומית נתנה אותו גוף בקשה ואותה צורת תשובה, ואין שימוש בפרמטרים שהוסרו (`temperature`, `top_p`, `top_k`). לא נבדקה קריאה חיה, כי היא דורשת את מפתח הייצור, וזה נתיב חילוץ הסכומים. | קריאה חיה מוצלחת אחת של חילוץ חשבונית עם ה-SDK החדש, בהחלטת רונן (העלאה אחת בדפדפן אחרי פריסה, עם revert מוכן), או שהקו 0.x מפסיק לקבל דגמים חדשים. |
+| `typescript` | 6.0.3 | 7.0.2 | `pnpm lint` נשבר בטעינה: `typescript-eslint` 8.72.x תומך ב-TS `<6.1.0`, ו-`eslint-config-next` זורק "does not support TS 7.0". `pnpm build` מריץ `lint` ראשון, ולכן גם הפריסה הייתה נשברת. `tsc --noEmit` ו-typecheck של `next build` עובדים. | `typescript-eslint` מוציא תמיכה ב-TS 7 (issue typescript-eslint#10940) ו-`eslint-config-next` מאמץ אותו. אז Renovate פותח PR רגיל. |
+| `pnpm` | 10.34.9 | 11 ו-12.16.1 | pnpm 12 הוא מעבר שרשרת כלים ולא עדכון גרסה: השדה `pnpm` ב-`package.json` כבר לא נקרא (`overrides` ו-`auditConfig` עוברים ל-`pnpm-workspace.yaml`), `strictDepBuilds` דורש `allowBuilds` עבור `@sentry/cli`, ה-lockfile חייב להיווצר מחדש (נחסם כרגע על ידי `minimumReleaseAge` של יום), `pnpm run` בלי `node_modules` מתקין קודם (משנה את ה-job `checks`, שכתוב עליו שהוא רץ בלי התקנה), ותמיכת `pnpm/action-setup` v6.0.x ב-pin של v12 לא אומתה. הקו 10.34 עדיין מקבל תיקונים. | PR מעבר ייעודי: `pnpm-workspace.yaml`, `allowBuilds`, lockfile מחדש, אימות שה-job `checks` נשאר בלי התקנה ושהפריסה עובדת עם ה-shim של corepack, ו-`pnpm/action-setup` בגרסה 6.1.0 ומעלה. |
+
+נבדקו ואושרו עם הערה, לא נדחו (1/11/2026):
+
+- `@sentry/nextjs` 11: מוזג עם `dataCollection: { userInfo: false }`, כדי לשמור על ההתנהגות של v10 (ראו "ניטור").
+- `eslint` 10: מוזג. ל-`eslint-plugin-react`, `eslint-plugin-import` ו-`eslint-plugin-jsx-a11y` אין עדיין
+  ESLint 10 בטווח ה-peer שלהם, אבל פלט ה-lint זהה (16 אזהרות, 0 שגיאות). אם אחרי עדכון של אחד הפלאגינים ה-lint יקרוס על כלל שלא רץ היום, זה המקום לבדוק.
+- `@hookform/resolvers` 7: מוזג. החבילה, ויחד איתה `react-hook-form`, לא מיובאות בשום מקום בקוד. הסרתן היא ניקוי נפרד, לא נעשה.
+
+## מצב הפרויקט: סגור, תחזוקה בלבד
+
+נכון ל-1/11/2026. אין פיתוח פעיל. הפרויקט רץ, מנוטר ומגובה, ומה שנשאר הוא תחזוקה.
+
+- **גרסאות:** Next 16.4.3, React 19.3.1, TypeScript 6.0.3, ESLint 10.14.0, Node 24.22.2 (`/opt/node-24`, ראו "Node"),
+  pnpm 10.34.9, Postgres 15.8 (`supabase/postgres:15.8.1.085` בקונטיינר `supabase-db`), `@supabase/supabase-js` 2.118.0,
+  `@supabase/ssr` 0.12.7, `@sentry/nextjs` 11.10.0, `@anthropic-ai/sdk` 0.137.0 (דגם החילוץ `claude-sonnet-4-6`), uuid 14.0.3.
+- **רץ אוטומטית:**
+  - Renovate: ימי ראשון 00:00 עד 05:59 (Asia/Jerusalem), עד 3 PRs במקביל, בלי automerge. התראות אבטחה בכל זמן, גם מחוץ לחלון.
+    Renovate לא ממזג בעצמו. כל PR עובר את השער שבנוהל החודשי.
+  - CI ב-GitHub Actions על כל `push` ו-`pull_request`: `typecheck`, `lint`, `checks`, `dupes-isolated` (חובה).
+    `anon-isolation` ו-`db-invariants` רק מדווחים מה לא רץ, והוי הירוק שלהם אינו "עבר".
+  - גיבויים: `billing-backup.service` יומי 03:00 UTC (`pg_dumpall` ו-restic, משותף עם billing) ו-`invoice-backup.timer`
+    חודשי ל-Google Drive. לשניהם יש התראה על כשל (ראו "גיבויים").
+- **ידני:**
+  - סריקת מייל וסריקת תיקייה: רק בלחיצה. הטיימר של Gmail מושבת בכוונה.
+  - בדיקת דפדפן אחרי שדרוג של framework (Next, React, `@supabase/ssr`): כניסה, רשימת חשבוניות והעלאה אחת.
+    אין משתמש smoke-test, ולכן לא נבדקת כניסה אוטומטית.
+  - מיזוג PRs של Renovate ופריסה (`scripts/deploy.sh` רק מ-`main`, אחרי מיזוג).
+  - סגירת (Resolve) אירוע הבדיקה הפתוח ב-Sentry, ויצירת מוניטור UptimeRobot (טרם הוגדר).
+- **החלטות סגורות:**
+  - `invoice_app` נשאר עם הרשאות כתיבה ו-`BYPASSRLS` (ארבעה סקריפטים תפעוליים כותבים דרכו). בלי `REVOKE`.
+  - אין משתמש smoke-test. בדיקת הדפדפן ידנית.
+  - נשארים על Node 24, לא 26. Renovate חסום מעל 24.
+  - מפתחות ה-Server Actions של Next פגים לבד ב-12/11/2026 (נשמרים ב-cache של ה-build ל-14 יום). לא מסובבים ידנית.
+  - סריקה ידנית בלבד, ללא טיימר.
+  - שלושת השדרוגים שנדחו (סעיף קודם).
+- **נוהל תחזוקה חודשי (5 שורות):**
+  1. ב-Dependency Dashboard (issue #10) עוברים על ה-PRs הפתוחים. כל PR נבדק ב-worktree נפרד: `pnpm install --frozen-lockfile`,
+     `pnpm lint`, `tsc --noEmit`, `pnpm build` ו-`check:*` לקריאה בלבד. אחר כך `gh pr merge --squash --delete-branch`,
+     `git pull`, `scripts/deploy.sh`. אין build בתיקיית הייצור מחוץ ל-`main`.
+  2. אחרי כל פריסה: `/api/health` מחזיר 200 עם `db:true`, בדיקת ה-proxy (307 ו-401), `/login` 200, `journalctl -u invoice.service -p err` נקי, `git status` נקי.
+  3. ודאו שהגיבויים רצו ושהיחידות לא ב-`failed`: `systemctl list-timers 'billing-backup*' 'invoice-backup*'`, `journalctl -u billing-backup.service -n 30`, `systemctl --failed`.
+  4. `pnpm run check:all` על ה-VPS (קריאה בלבד מול ה-DB), ועדכון patch של Node 24 כשיוצא (סעיף "Node").
+  5. אחת לרבעון: תרגיל שחזור (סעיף "גיבויים"), בדיקה שהדגם `claude-sonnet-4-6` לא מוכרז להפסקה אצל Anthropic,
+     ובדיקה אם הגיע התאריך למחוק את `/var/backups/invoice-node20/` ו-`/var/backups/invoice-nginx/` (1/12/2026).
