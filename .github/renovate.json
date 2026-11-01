@@ -19,6 +19,24 @@
       "description": "Open the weekly lock file refresh before majors, so a backlog of majors under the 3-PR cap never starves it",
       "matchUpdateTypes": ["lockFileMaintenance"],
       "prPriority": 1
+    },
+    {
+      "description": "The dupes-isolated CI service container must match production (supabase/postgres 15.8.x -> postgres:15.8); never auto-bump it",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["postgres"],
+      "enabled": false
+    },
+    {
+      "description": "Runtime-critical packages: one PR each, kept out of the weekly all-non-major group",
+      "matchPackageNames": ["@anthropic-ai/sdk", "@supabase/ssr", "@supabase/supabase-js", "next", "@sentry/nextjs"],
+      "groupName": null,
+      "groupSlug": null
+    },
+    {
+      "description": "react and react-dom must move together, in their own PR",
+      "matchPackageNames": ["react", "react-dom"],
+      "groupName": "react",
+      "groupSlug": "react"
     }
   ]
 }

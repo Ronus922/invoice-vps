@@ -26,9 +26,22 @@
   - למה: האפליקציה עצמה לא מתחברת איתו (אין בקוד לקוח Postgres ישיר, היא עובדת מול
     Supabase דרך REST). הבדיקה היחידה שיצרה מסד, `check:dupes` חלק 2, עברה ל-CI על
     Postgres חד-פעמי. אין סיבה שתפקיד של האפליקציה יוכל ליצור מסדים בקלאסטר המשותף.
-  - נשארו לו `BYPASSRLS` והחברות ב-`pg_signal_backend`. אלה לא נבדקו במסגרת השינוי.
+  - נשארו לו `BYPASSRLS` והחברות ב-`pg_signal_backend`.
   - צריך מסד זמני? מריצים אותו על Postgres חד-פעמי, לא על `supabase-db`.
     החזרה (רק באישור רונן): `ALTER ROLE invoice_app CREATEDB;` כ-`postgres`.
+  - **`invoice_app` נשאר עם הרשאות כתיבה ועם `BYPASSRLS` בכוונה** (החלטת רונן, 1/11/2026,
+    אחרי מיפוי כל השימושים בו). אין `REVOKE` על טבלאות, על sequences או על default
+    privileges. לא מציעים את זה שוב בלי החלטה חדשה.
+    - למה כתיבה: ארבעה סקריפטים תפעוליים כותבים דרכו, ומורצים ידנית, לא אוטומטית:
+      `dedup-cleanup` (DELETE), `backfill-derive-vat` ו-`apply-reextract` (UPDATE),
+      `backfill-doc-type` (DDL ו-UPDATE; ה-DDL כבר נכשל כי התפקיד אינו הבעלים).
+      `check:dupes` מפנה ל-`dedup-cleanup` בהודעת הכשל שלו, ולכן הסרת הכתיבה הייתה שוברת
+      את נוהל התיקון.
+    - למה אין טעם להגביל: מפתח ה-service-role (`SUPABASE_SERVICE_ROLE_KEY`) יושב על אותו
+      שרת ונותן ממילא גישה מלאה לכל הנתונים. הגבלת `invoice_app` לא מצמצמת את הסיכון
+      בפועל, והיא רק מוסיפה חיכוך לסקריפטים.
+    - סקריפטי `check:*` על ה-DB האמיתי קוראים בלבד (SELECT). `check:dupes` חלק 2 כותב רק
+      ל-Postgres חד-פעמי ב-CI, לעולם לא דרך `DIRECT_URL`.
 - מיגרציות: **מנגנון אחר, לא dbmate** (סעיף 7 בתבנית ההקשחה; החלטת רונן, 11/10/2026).
   קובצי SQL ב-`supabase/migrations/` מוחלים ידנית כ-`postgres`:
   `docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < supabase/migrations/<file>.sql`.
