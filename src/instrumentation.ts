@@ -15,7 +15,10 @@ export async function register(): Promise<void> {
     const dsn = process.env.SENTRY_DSN
     if (dsn) {
       const Sentry = await import('@sentry/nextjs')
-      Sentry.init({ dsn, tracesSampleRate: 0 })
+      // v11 collects the client IP and x-forwarded-for by default (dataCollection);
+      // v10 did not. userInfo: false keeps the v10 behaviour. Cookies, authorization
+      // and secret headers are filtered by v11 on its own.
+      Sentry.init({ dsn, tracesSampleRate: 0, dataCollection: { userInfo: false } })
       console.info('[sentry] Sentry initialized')
     } else {
       console.info('[sentry] Sentry disabled (no DSN)')
