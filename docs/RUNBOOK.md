@@ -3,7 +3,8 @@
 נוהל תגובה לתקלה. שמות משתנים ושמות שירותים בלבד, בלי ערכי סודות.
 שדה שעוד לא ידוע כתוב "טרם הוגדר".
 הריפו ציבורי, ולכן אין כאן נתיבי שרת וכתובות פנימיות. הם בקובץ ה-env של השרת
-ובהגדרות ה-systemd, לא בגיט.
+ובהגדרות ה-systemd, לא בגיט. החריג היחיד הוא נתיבי ה-Node (סעיף Node), כי `/opt/node-24`
+כתוב גם ב-`scripts/deploy.sh`.
 
 ## זהות
 
@@ -108,6 +109,56 @@
 - **לא בונים בתיקיית האפליקציה מענף אחר.** השירות מגיש ישירות מ-`.next/standalone`
   שלה, ו-build שם מחליף את מה שרץ. בדיקת build של ענף: `git worktree add` לתיקייה
   זמנית, ובונים שם.
+
+## Node
+
+- **גרסה:** Node 24 LTS ("Krypton"), מוצמד ל-`v24.22.2` (נכון ל-1/11/2026). `engines.node` ב-`package.json`
+  הוא `>=24 <25`, `.nvmrc` הוא `24`, וה-CI רץ על Node 24. Renovate לא מציע Node או `@types/node`
+  מעל 24 (מעבר לקו אחר הוא החלטה, לא PR אוטומטי).
+- **איפה:** `/opt/node-v24.22.2-linux-x64` (tarball רשמי מ-nodejs.org, אומת מול `SHASUMS256.txt`),
+  ו-`/opt/node-24` הוא symlink אליו (אותה תבנית כמו `/opt/node22` של billing). רק `invoice` משתמש בו.
+  ה-Node של המערכת (`/usr/bin/node`, חבילת NodeSource 20 מ-apt) לא שונה. הוא משרת את sea-tower, את
+  pm2 ואת שאר האפליקציות, ולכן לא מעדכנים אותו ולא משנים `PATH` או alias גלובלי בשביל invoice.
+- **pnpm:** ה-shim של corepack ב-`/opt/node-24/bin/pnpm`; הגרסה נקבעת לפי `packageManager`.
+  `deploy.sh` מוסיף את `/opt/node-24/bin` ל-`PATH` של הסקריפט בלבד, ויוצא ב-exit 1 אם `node` אינו v24
+  או אם `pnpm` אינו ה-shim משם. אחרי ה-restart הוא בודק שהתהליך החי באמת רץ מ-`/opt/node-24`.
+- **השירות:** drop-in ב-`/etc/systemd/system/invoice.service.d/node24.conf`
+  (ה-`ExecStart=` הריק מבטל את השורה של היחידה המקורית; שאר היחידה לא שונתה):
+
+  ```ini
+  [Service]
+  ExecStart=
+  ExecStart=/opt/node-24/bin/node /var/www/invoice/.next/standalone/server.js
+  ```
+
+  אימות: `readlink -f /proc/$(systemctl show -p MainPID --value invoice.service)/exe` מחזיר
+  נתיב תחת `/opt/node-v24...`.
+- **עדכון patch** (24.x.y חדש; הגרסה מ-<https://nodejs.org/dist/index.json>, רק שורת 24, תמיד מקובעת ולא latest):
+
+  ```bash
+  V=v24.x.y
+  cd "$(mktemp -d)" && curl -fsSO "https://nodejs.org/dist/$V/node-$V-linux-x64.tar.xz" -O "https://nodejs.org/dist/$V/SHASUMS256.txt"
+  grep " node-$V-linux-x64.tar.xz\$" SHASUMS256.txt | sha256sum -c -     # חייב להדפיס OK, אחרת עוצרים
+  sudo mkdir "/opt/node-$V-linux-x64" && sudo tar -xJf "node-$V-linux-x64.tar.xz" --no-same-owner -C "/opt/node-$V-linux-x64" --strip-components=1
+  sudo env PATH="/opt/node-$V-linux-x64/bin:$PATH" corepack enable --install-directory "/opt/node-$V-linux-x64/bin"
+  readlink /opt/node-24                                                    # לרשום את הגרסה הנוכחית, זו נקודת החזרה
+  sudo ln -sfn "node-$V-linux-x64" /opt/node-24
+  cd /var/www/invoice && bash scripts/deploy.sh                            # בונה מחדש, מפעיל מחדש ומאמת Node החי
+  ```
+
+  נכשל? חוזרים לתיקייה הקודמת: `sudo ln -sfn node-<הקודמת>-linux-x64 /opt/node-24 && sudo systemctl restart invoice.service`.
+  את התיקייה הקודמת מוחקים רק אחרי שהחדשה אומתה.
+- **Rollback ל-Node 20** (פקודות מדויקות; עותק של היחידה המקורית נשמר ב-`/var/backups/invoice-node20/`):
+  1. `git revert <merge-commit של ה-PR של Node 24>` דרך PR, ומיזוג (`gh pr merge --squash --delete-branch`).
+     הגרסה המוחזרת של `deploy.sh` רצה על ה-Node הגלובלי.
+  2. `sudo rm /etc/systemd/system/invoice.service.d/node24.conf && sudo rmdir /etc/systemd/system/invoice.service.d && sudo systemctl daemon-reload`
+     (לא מפעיל מחדש בעצמו, השירות ממשיך לרוץ עד הפריסה).
+  3. `cd /var/www/invoice && git pull --ff-only && bash scripts/deploy.sh`.
+  4. אימות: `curl -s http://127.0.0.1:3002/api/health` מחזיר `{"ok":true,"db":true}`, והתהליך החי
+     רץ מ-`/usr/bin/node`.
+
+  חירום, כשאין זמן ל-PR: מבצעים רק את שלב 2 ואחריו `sudo systemctl restart invoice.service`. ה-build של Node 24
+  רץ בלי בעיה על Node 20 (כל המודולים הנייטיב הם N-API עם בינאריים מוכנים), ואת ה-PR מסיימים אחרי.
 
 ## גיבויים
 

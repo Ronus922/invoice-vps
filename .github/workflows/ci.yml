@@ -114,9 +114,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The VPS runs Node v20.20.1 and package.json declares no `engines` field,
-  # so CI pins the production major rather than drifting onto the runner default.
-  NODE_VERSION: '20'
+  # Production runs this app on Node 24 (its own /opt/node-24, see docs/RUNBOOK.md)
+  # and package.json `engines` says >=24 <25, so CI pins the same major rather than
+  # drifting onto the runner default.
+  NODE_VERSION: '24'
 
 jobs:
   # --------------------------------------------------------------------------

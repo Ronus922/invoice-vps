@@ -33,6 +33,11 @@
       "groupSlug": null
     },
     {
+      "description": "Stay on the Node 24 LTS line: no Node 25+ (and no @types/node past 24). Production runs Node 24 from /opt/node-24 (docs/RUNBOOK.md); moving to another line is a deliberate decision, not a bot PR",
+      "matchDepNames": ["node", "@types/node"],
+      "allowedVersions": "<25"
+    },
+    {
       "description": "react and react-dom must move together, in their own PR",
       "matchPackageNames": ["react", "react-dom"],
       "groupName": "react",
