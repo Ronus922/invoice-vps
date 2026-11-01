@@ -622,7 +622,7 @@ async function recordScannedEmail(
 
 async function updateScanState(scannedCount: number, invoicesCount: number) {
   // Atomic SQL increment — the old read-then-write lost counts when two scans
-  // overlapped (cron + manual).
+  // overlapped (two manual scans).
   const { error } = await supabase.rpc('increment_scan_totals', {
     p_scanned: scannedCount,
     p_found: invoicesCount,
@@ -668,6 +668,9 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await authorize(request)
   if (!auth.ok) return auth.res
+  // userId === null means the X-Cron-Secret header was used. Nothing calls this
+  // endpoint on a schedule any more (the Gmail timer is disabled on purpose, scans
+  // are manual-only); the header path stays for an operator running a scan by hand.
   const isCronRun = auth.userId === null
   const createdBy: string | null = auth.userId
 
@@ -987,7 +990,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Reject overlapping scans (cron 02:30 vs a manual click, or two tabs) —
+  // Reject overlapping scans (a double click, or two tabs) —
   // they double-fetch Gmail and double-bill extraction.
   if (activeScan) {
     return NextResponse.json({ status: 'error', message: 'סריקה כבר פועלת' }, { status: 409 })

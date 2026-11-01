@@ -123,9 +123,9 @@ async function removeSourceFile(
   }
 }
 
-// One scan at a time — across the auto-scan on page load, the manual dialog
-// scan, and other tabs. Overlapping scans used to double-process files and
-// then fail deleting what the other run already deleted.
+// One scan at a time — across the scan panel, a double click, and other tabs.
+// Overlapping scans used to double-process files and then fail deleting what
+// the other run already deleted.
 const SCAN_LOCK_NAME = 'invoiceflow-folder-scan'
 let scanLockHeldFallback = false // same-tab guard when Web Locks is unavailable
 
