@@ -3,7 +3,7 @@
 // with the CURRENT (fixed) extraction prompt, then:
 //   - bookable verdict  → keep, set the new doc_type, recompute needs_review
 //                         from the stored amounts (released rows are sent by
-//                         the nightly drain / the red banner)
+//                         the next manual scan / the red banner)
 //   - non-invoice again → delete the row AND its storage object (two votes:
 //                         the original pass and this stricter pass agree)
 // Run: npx tsx scripts/retriage-flagged.ts            (dry run)

@@ -165,7 +165,7 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
         open={open}
         onClose={onClose}
         title="סריקת תיקייה"
-        subtitle="שמור תיקייה במחשב ועבד חשבוניות אוטומטית"
+        subtitle="שמור תיקייה במחשב וסרוק אותה ידנית בלחיצה"
         icon={FolderUp}
       >
           {!supported ? (
@@ -176,7 +176,7 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
                   <p className="font-medium mb-1">תכונה זו דורשת Chrome או Edge על מחשב</p>
                   <p className="text-xs text-amber-200/80">
                     Safari, Firefox ומכשירי iOS לא תומכים בגישה ישירה לתיקיות מהדפדפן.
-                    בקש מהמערכת לסרוק את המייל אוטומטית — זה רץ בצד השרת ולא דורש דפדפן.
+                    אפשר להפעיל סריקת מייל ידנית בלחיצה — היא רצה בצד השרת ולא דורשת דפדפן.
                   </p>
                 </div>
               </div>
@@ -363,7 +363,7 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
                   <Info className="w-3 h-3 text-[#2dd4bf]" />
                 </span>
                 <p className="text-[12.5px] text-[#8fb0e8] leading-[1.5]">
-                  סריקה אוטומטית רצה כשהדפדפן פתוח. סריקת המייל בצד השרת רצה גם בלי דפדפן.
+                  סריקת התיקייה מופעלת בלחיצה ורצה כשהדפדפן פתוח. סריקת המייל מופעלת אף היא בלחיצה, אך רצה בצד השרת ולא תלויה בדפדפן.
                 </p>
               </div>
             </div>
@@ -376,7 +376,7 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
             <AlertDialogTitle className="text-right">ניתוק תיקייה</AlertDialogTitle>
             <AlertDialogDescription className="text-right">
               לנתק את &quot;{handle?.name}&quot;? הקבצים שכבר עובדו יישארו כפי שהם — רק המעקב
-              האוטומטי אחרי התיקייה יופסק.
+              אחרי התיקייה יופסק.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex gap-2 justify-start">
