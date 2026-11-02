@@ -236,17 +236,22 @@
 
 ## שדרוגים שנדחו בכוונה
 
-שלוש הצעות של Renovate נבדקו ולא מוזגו. לכל אחת יש הגבלה ב-`.github/renovate.json` (`allowedVersions`, עם
+שתי הצעות של Renovate נבדקו ולא מוזגו. לכל אחת יש הגבלה ב-`.github/renovate.json` (`allowedVersions`, עם
 `description` שמפנה לכאן), כדי שלא ייפתח PR חדש עד שתנאי החזרה מתקיימים. כשהתנאי מתקיים מסירים את הכלל.
 
 | חבילה | רצה | נדחה | סיבה | תנאי חזרה |
 |---|---|---|---|---|
-| `@anthropic-ai/sdk` | 0.137.0 | 1.x (1.3.0) | 1.0 מעביר את ה-Messages API לגרסת API `2026-10-21` ושולח את המפתח בכותרת `Authorization` במקום `X-Api-Key`. בשני אתרי הקריאה (`extract-invoice`, `scan-gmail`) ובשני הסקריפטים לא נמצאה השפעה: `tsc` נקי, בדיקת wire מקומית נתנה אותו גוף בקשה ואותה צורת תשובה, ואין שימוש בפרמטרים שהוסרו (`temperature`, `top_p`, `top_k`). לא נבדקה קריאה חיה, כי היא דורשת את מפתח הייצור, וזה נתיב חילוץ הסכומים. | קריאה חיה מוצלחת אחת של חילוץ חשבונית עם ה-SDK החדש, בהחלטת רונן (העלאה אחת בדפדפן אחרי פריסה, עם revert מוכן), או שהקו 0.x מפסיק לקבל דגמים חדשים. |
 | `typescript` | 6.0.3 | 7.0.2 | `pnpm lint` נשבר בטעינה: `typescript-eslint` 8.72.x תומך ב-TS `<6.1.0`, ו-`eslint-config-next` זורק "does not support TS 7.0". `pnpm build` מריץ `lint` ראשון, ולכן גם הפריסה הייתה נשברת. `tsc --noEmit` ו-typecheck של `next build` עובדים. | `typescript-eslint` מוציא תמיכה ב-TS 7 (issue typescript-eslint#10940) ו-`eslint-config-next` מאמץ אותו. נבדק אחת לרבעון (נוהל התחזוקה, שורה 5). אז מסירים את התקרה ו-Renovate פותח PR רגיל. |
 | `pnpm` | 10.34.9 | 11 ו-12.16.1 | pnpm 12 הוא מעבר שרשרת כלים ולא עדכון גרסה: השדה `pnpm` ב-`package.json` כבר לא נקרא (`overrides` ו-`auditConfig` עוברים ל-`pnpm-workspace.yaml`), `strictDepBuilds` דורש `allowBuilds` עבור `@sentry/cli`, ה-lockfile חייב להיווצר מחדש (נחסם כרגע על ידי `minimumReleaseAge` של יום), `pnpm run` בלי `node_modules` מתקין קודם (משנה את ה-job `checks`, שכתוב עליו שהוא רץ בלי התקנה), ותמיכת `pnpm/action-setup` v6.0.x ב-pin של v12 לא אומתה. הקו 10.34 עדיין מקבל תיקונים. | PR מעבר ייעודי: `pnpm-workspace.yaml`, `allowBuilds`, lockfile מחדש, אימות שה-job `checks` נשאר בלי התקנה ושהפריסה עובדת עם ה-shim של corepack, ו-`pnpm/action-setup` בגרסה 6.1.0 ומעלה. |
 
-נבדקו ואושרו עם הערה, לא נדחו (1/11/2026):
+נבדקו ואושרו עם הערה, לא נדחו (1/11/2026 ו-2/11/2026):
 
+- `@anthropic-ai/sdk` 1.3.0: נדחה ב-1/11/2026 ומוזג ב-2/11/2026, אחרי בדיקה חיה. 1.0 מעביר את ה-Messages API לגרסת API
+  `2026-10-21` ושולח את המפתח בכותרת `Authorization` במקום `X-Api-Key`. הבדיקה: חשבונית PDF קיימת אחת (מקור ידני, שקלים),
+  עם אותה קריאה ואותה עיבוד-המשך כמו ב-`/api/extract-invoice` (ישירות, לא דרך ה-API), עם מפתח הייצור, בלי לקוח DB ובלי שום כתיבה.
+  תשעת השדות (ספק, תאריך, מספר מסמך, לפני מע"מ, מע"מ, סה"כ, מטבע, סוג מסמך, קטגוריה) יצאו זהים לערכים השמורים ב-DB
+  ולפלט המקורי של הסריקה. `stop_reason` היה `tool_use`, והדגם `claude-sonnet-4-6` התקבל על גרסת ה-API החדשה.
+  התקרה `<1` הוסרה מ-`.github/renovate.json`.
 - `@sentry/nextjs` 11: מוזג עם `dataCollection: { userInfo: false }`, כדי לשמור על ההתנהגות של v10 (ראו "ניטור").
 - `eslint` 10: מוזג. ל-`eslint-plugin-react`, `eslint-plugin-import` ו-`eslint-plugin-jsx-a11y` אין עדיין
   ESLint 10 בטווח ה-peer שלהם, אבל פלט ה-lint זהה (16 אזהרות, 0 שגיאות). אם אחרי עדכון של אחד הפלאגינים ה-lint יקרוס על כלל שלא רץ היום, זה המקום לבדוק.
@@ -258,7 +263,7 @@
 
 - **גרסאות:** Next 16.4.3, React 19.3.1, TypeScript 6.0.3, ESLint 10.14.0, Node 24.22.2 (`/opt/node-24`, ראו "Node"),
   pnpm 10.34.9, Postgres 15.8 (`supabase/postgres:15.8.1.085` בקונטיינר `supabase-db`), `@supabase/supabase-js` 2.118.0,
-  `@supabase/ssr` 0.12.7, `@sentry/nextjs` 11.10.0, `@anthropic-ai/sdk` 0.137.0 (דגם החילוץ `claude-sonnet-4-6`), uuid 14.0.3.
+  `@supabase/ssr` 0.12.7, `@sentry/nextjs` 11.10.0, `@anthropic-ai/sdk` 1.3.0 (דגם החילוץ `claude-sonnet-4-6`), uuid 14.0.3.
 - **רץ אוטומטית:**
   - Renovate: ימי ראשון 00:00 עד 05:59 (Asia/Jerusalem), עד 3 PRs במקביל, בלי automerge. התראות אבטחה בכל זמן, גם מחוץ לחלון.
     Renovate לא ממזג בעצמו. כל PR עובר את השער שבנוהל החודשי.
@@ -279,7 +284,7 @@
   - נשארים על Node 24, לא 26. Renovate חסום מעל 24.
   - מפתחות ה-Server Actions של Next פגים לבד ב-12/11/2026 (נשמרים ב-cache של ה-build ל-14 יום). לא מסובבים ידנית.
   - סריקה ידנית בלבד, ללא טיימר.
-  - שלושת השדרוגים שנדחו (סעיף קודם).
+  - שני השדרוגים שנדחו (סעיף קודם): TypeScript 7 ו-pnpm 11/12.
 - **נוהל תחזוקה חודשי (5 שורות):**
   1. ב-Dependency Dashboard (issue #10) עוברים על ה-PRs הפתוחים. כל PR נבדק ב-worktree נפרד: `pnpm install --frozen-lockfile`,
      `pnpm lint`, `tsc --noEmit`, `pnpm build` ו-`check:*` לקריאה בלבד. אחר כך `gh pr merge --squash --delete-branch`,
