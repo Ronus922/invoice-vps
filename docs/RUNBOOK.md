@@ -1,11 +1,16 @@
 # RUNBOOK — invoice-vps (InvoiceFlow)
 
 נוהל תגובה לתקלה. שמות משתנים ושמות שירותים בלבד, בלי ערכי סודות.
-שדה שעוד לא ידוע כתוב "טרם הוגדר".
+שדה שלא ידוע או שלא אומת כתוב "לא מאומת" עם תאריך הבדיקה האחרונה, ולא "טרם הוגדר".
 הריפו ציבורי, ולכן אין כאן נתיבי שרת וכתובות פנימיות. הם בקובץ ה-env של השרת
 ובהגדרות ה-systemd, לא בגיט. החריגים: נתיבי ה-Node (סעיף Node), כי `/opt/node-24`
 כתוב גם ב-`scripts/deploy.sh`, ונתיבי העותקים של שינויי שרת (`/var/backups/invoice-*`), כדי שאפשר
 יהיה לחזור אחורה.
+
+**כלל: בודקים לפני שמדווחים (נוסף 2/11/2026).** לפני שמדווחים שמשהו "חסר", "פתוח" או "נשאר לרונן",
+בודקים אותו בפועל: קריאת API, קובץ, לוג, או שאלה לרונן. לא מסיקים מתיעוד ישן, וגם לא מהמסמך הזה.
+מה שאי אפשר לבדוק מהשרת נכתב "לא מאומת" עם תאריך, ונשאל עליו במפורש. מקרה הייחוס: UptimeRobot ו-Sentry MCP
+נרשמו כאן ובזיכרון כ"טרם הוגדר" וכ"נשאר לרונן" זמן אחרי שרונן כבר הגדיר אותם.
 
 ## זהות
 
@@ -66,20 +71,27 @@
     החזרה: `sudo cp -p` של העותק לקובץ ה-site (הוא קובץ רגיל, לא symlink), `sudo nginx -t`,
     `sudo systemctl reload nginx`. אל תחליפו אותו ב-symlink מ-`sites-available`: שם חסרה
     `client_max_body_size 20M` והעלאות מעל 1MB ייכשלו.
-- UptimeRobot: מוניטור "invoice-vps health" (טרם הוגדר)
-  - HTTP(s), URL: `https://invoice.bios.co.il/api/health`
-  - אינטרוול 5 דקות, התרעה על כל סטטוס שאינו 200, איש קשר: מייל מאומת
-- Sentry: `bios-s2/invoice-vps` (טרם הוגדר). צד שרת בלבד, opt-in דרך `SENTRY_DSN`.
+- UptimeRobot: מוניטור על `https://invoice.bios.co.il/api/health`. **מחובר ופעיל** (הוגדר על ידי רונן).
+  - אומת ב-2/11/2026 מלוג ה-nginx של השרת: 283 בדיקות של UptimeRobot ב-1/11 ועוד 77 ב-2/11 עד 06:28 UTC,
+    כולן על הדומיין של invoice ו-`200`, כלומר בערך אחת ל-5 דקות. אפס `429`, גם אחרי שנוסף `limit_req`.
+  - לא מאומתים (אין בסביבה מפתח API של UptimeRobot): שם המוניטור, ההתראה על סטטוס שאינו 200 ואיש הקשר.
+    את הדברים האלה רואים רק בלוח הבקרה של UptimeRobot.
+- Sentry: פרויקט `bios-s2/invoice-vps`. צד שרת בלבד, opt-in דרך `SENTRY_DSN`. **פעיל**: ה-DSN מוגדר בשרת.
   - שורה אחת בכל עלייה: `journalctl -u invoice.service -n 200 --no-pager | grep '\[sentry\]'`
     מציגה "Sentry initialized" או "Sentry disabled (no DSN)".
   - נתפסות שגיאות שלא טופלו (`onRequestError`). routes שתופסים שגיאה ומחזירים 500
     בעצמם לא מגיעים ל-Sentry, רק ל-journal.
-  - Sentry MCP: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp/bios-s2/invoice-vps`
+  - Sentry MCP: **מחובר** (הוגדר על ידי רונן, ההגדרה מצביעה על `https://mcp.sentry.dev/mcp/bios-s2/invoice-vps`).
+    לחיבור מחדש: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp/bios-s2/invoice-vps`
     ואז `/mcp` ו-Authenticate (OAuth של רונן).
-  - מצב ב-1/11/2026: `SENTRY_DSN` מוגדר בשרת, והשורה "Sentry initialized" מופיעה בכל עלייה. @sentry/nextjs 11
+    הערה מ-2/11/2026: ב-session של Claude שרץ על ה-VPS (`claude mcp list`) החיבור נכשל ב-TLS עם
+    `SELF_SIGNED_CERT_IN_CHAIN`, ולכן משם אי אפשר לשאול דרכו. מהמחשב של רונן לא נבדק.
+  - אומת ב-1/11/2026 וב-2/11/2026: `SENTRY_DSN` מוגדר בשרת, והשורה "Sentry initialized" מופיעה בכל עלייה. @sentry/nextjs 11
     רץ עם `dataCollection: { userInfo: false }` ב-`src/instrumentation.ts`: בלי IP של הלקוח ובלי
     `x-forwarded-for` באירועים (v11 אוסף אותם כברירת מחדל, v10 לא). כותרות cookie, authorization ו-secret
-    מסוננות על ידי v11 עצמו. סגירת (Resolve) אירוע הבדיקה הפתוח ב-Sentry נשארה לרונן, כי אין בסביבה טוקן עם הרשאה לכך.
+    מסוננות על ידי v11 עצמו.
+  - **לא מאומת (2/11/2026):** האם אירוע הבדיקה מ-11/10/2026 נסגר (Resolve). אין בשרת טוקן של Sentry, ו-Sentry MCP לא עובד מה-VPS.
+    נשאל רונן.
 
 ## תגובה לקריסה
 
@@ -103,8 +115,10 @@
 
 - פקודה: מ-`main` בלבד, עם עץ נקי: `git checkout main && git pull && bash scripts/deploy.sh`.
   לפני PR מריצים `pnpm check:all` על השרת, כי ארבע בדיקות ה-DB לא רצות ב-CI.
-- אימות: `deploy.sh` מחכה עד 30 שניות לתשובה מהאפליקציה אחרי ה-restart. אימות
-  BUILD_ID (build מוגש = build בדיסק) ובדיקת `/api/health` בתוך הסקריפט: טרם הוגדרו.
+- אימות: `deploy.sh` מחכה עד 30 שניות לתשובה מהאפליקציה אחרי ה-restart (`curl` ל-`/`, לא ל-`/api/health`),
+  ואז בודק שה-proxy מגן (`/zz-proxy-probe` מחזיר 307 ו-`/api/zz-proxy-probe` מחזיר 401) ושהתהליך החי רץ מ-`/opt/node-24`.
+  נבדק מול הסקריפט ב-2/11/2026: אין בו אימות BUILD_ID (build מוגש = build בדיסק), ו-`/api/health` מחזיר רק
+  `{ok,db}` בלי שדה build. את `/api/health` בודקים ידנית אחרי כל פריסה (נוהל התחזוקה, שורה 2).
 - **בדיקת עשן מאומתת אחרי פריסה (משתמש בדיקה) לא נבנתה, בכוונה (31/10/2026).**
   באפליקציה אין רמות הרשאה: כל משתמש שנמצא ב-`ALLOWED_EMAILS` מקבל גישה מלאה (קריאה,
   כתיבה, מחיקה, העלאה, סריקה, גיבוי ושליחה לרו"ח). משתמש בדיקה ייעודי עם סיסמה בקובץ
@@ -217,8 +231,8 @@
   - **ניקוי:** `docker rm -f invoice-restore-drill`. לא נשארו volumes, והפורט פנוי.
   - חוזרים על התרגיל אחרי כל שינוי בגיבוי של billing, ולפחות פעם בחצי שנה. שחזור לפרוד רק באישור מפורש של
     רונן ועם גיבוי טרי.
-- משמורת מפתח ההצפנה: מפתח ה-restic של billing, במנהל הסיסמאות של רונן (לפי תבנית
-  ההקשחה; לא נבדק במסגרת הפרויקט הזה).
+- משמורת מפתח ההצפנה: מפתח ה-restic של billing, אמור להיות במנהל הסיסמאות של רונן (לפי תבנית
+  ההקשחה). **לא מאומת (2/11/2026):** אי אפשר לבדוק את זה מהשרת. נשאל רונן.
 
 ## שדרוגים שנדחו בכוונה
 
@@ -228,7 +242,7 @@
 | חבילה | רצה | נדחה | סיבה | תנאי חזרה |
 |---|---|---|---|---|
 | `@anthropic-ai/sdk` | 0.137.0 | 1.x (1.3.0) | 1.0 מעביר את ה-Messages API לגרסת API `2026-10-21` ושולח את המפתח בכותרת `Authorization` במקום `X-Api-Key`. בשני אתרי הקריאה (`extract-invoice`, `scan-gmail`) ובשני הסקריפטים לא נמצאה השפעה: `tsc` נקי, בדיקת wire מקומית נתנה אותו גוף בקשה ואותה צורת תשובה, ואין שימוש בפרמטרים שהוסרו (`temperature`, `top_p`, `top_k`). לא נבדקה קריאה חיה, כי היא דורשת את מפתח הייצור, וזה נתיב חילוץ הסכומים. | קריאה חיה מוצלחת אחת של חילוץ חשבונית עם ה-SDK החדש, בהחלטת רונן (העלאה אחת בדפדפן אחרי פריסה, עם revert מוכן), או שהקו 0.x מפסיק לקבל דגמים חדשים. |
-| `typescript` | 6.0.3 | 7.0.2 | `pnpm lint` נשבר בטעינה: `typescript-eslint` 8.72.x תומך ב-TS `<6.1.0`, ו-`eslint-config-next` זורק "does not support TS 7.0". `pnpm build` מריץ `lint` ראשון, ולכן גם הפריסה הייתה נשברת. `tsc --noEmit` ו-typecheck של `next build` עובדים. | `typescript-eslint` מוציא תמיכה ב-TS 7 (issue typescript-eslint#10940) ו-`eslint-config-next` מאמץ אותו. אז Renovate פותח PR רגיל. |
+| `typescript` | 6.0.3 | 7.0.2 | `pnpm lint` נשבר בטעינה: `typescript-eslint` 8.72.x תומך ב-TS `<6.1.0`, ו-`eslint-config-next` זורק "does not support TS 7.0". `pnpm build` מריץ `lint` ראשון, ולכן גם הפריסה הייתה נשברת. `tsc --noEmit` ו-typecheck של `next build` עובדים. | `typescript-eslint` מוציא תמיכה ב-TS 7 (issue typescript-eslint#10940) ו-`eslint-config-next` מאמץ אותו. נבדק אחת לרבעון (נוהל התחזוקה, שורה 5). אז מסירים את התקרה ו-Renovate פותח PR רגיל. |
 | `pnpm` | 10.34.9 | 11 ו-12.16.1 | pnpm 12 הוא מעבר שרשרת כלים ולא עדכון גרסה: השדה `pnpm` ב-`package.json` כבר לא נקרא (`overrides` ו-`auditConfig` עוברים ל-`pnpm-workspace.yaml`), `strictDepBuilds` דורש `allowBuilds` עבור `@sentry/cli`, ה-lockfile חייב להיווצר מחדש (נחסם כרגע על ידי `minimumReleaseAge` של יום), `pnpm run` בלי `node_modules` מתקין קודם (משנה את ה-job `checks`, שכתוב עליו שהוא רץ בלי התקנה), ותמיכת `pnpm/action-setup` v6.0.x ב-pin של v12 לא אומתה. הקו 10.34 עדיין מקבל תיקונים. | PR מעבר ייעודי: `pnpm-workspace.yaml`, `allowBuilds`, lockfile מחדש, אימות שה-job `checks` נשאר בלי התקנה ושהפריסה עובדת עם ה-shim של corepack, ו-`pnpm/action-setup` בגרסה 6.1.0 ומעלה. |
 
 נבדקו ואושרו עם הערה, לא נדחו (1/11/2026):
@@ -240,7 +254,7 @@
 
 ## מצב הפרויקט: סגור, תחזוקה בלבד
 
-נכון ל-1/11/2026. אין פיתוח פעיל. הפרויקט רץ, מנוטר ומגובה, ומה שנשאר הוא תחזוקה.
+נכון ל-1/11/2026 (סעיף הניטור עודכן ב-2/11/2026). אין פיתוח פעיל. הפרויקט רץ, מנוטר ומגובה, ומה שנשאר הוא תחזוקה.
 
 - **גרסאות:** Next 16.4.3, React 19.3.1, TypeScript 6.0.3, ESLint 10.14.0, Node 24.22.2 (`/opt/node-24`, ראו "Node"),
   pnpm 10.34.9, Postgres 15.8 (`supabase/postgres:15.8.1.085` בקונטיינר `supabase-db`), `@supabase/supabase-js` 2.118.0,
@@ -257,7 +271,8 @@
   - בדיקת דפדפן אחרי שדרוג של framework (Next, React, `@supabase/ssr`): כניסה, רשימת חשבוניות והעלאה אחת.
     אין משתמש smoke-test, ולכן לא נבדקת כניסה אוטומטית.
   - מיזוג PRs של Renovate ופריסה (`scripts/deploy.sh` רק מ-`main`, אחרי מיזוג).
-  - סגירת (Resolve) אירוע הבדיקה הפתוח ב-Sentry, ויצירת מוניטור UptimeRobot (טרם הוגדר).
+  - אין עוד פריטי ניטור שנשארו ידניים: UptimeRobot ו-Sentry MCP הוגדרו על ידי רונן (ראו "ניטור").
+    היחיד שלא מאומת: האם אירוע הבדיקה של Sentry מ-11/10/2026 נסגר.
 - **החלטות סגורות:**
   - `invoice_app` נשאר עם הרשאות כתיבה ו-`BYPASSRLS` (ארבעה סקריפטים תפעוליים כותבים דרכו). בלי `REVOKE`.
   - אין משתמש smoke-test. בדיקת הדפדפן ידנית.
@@ -274,3 +289,7 @@
   4. `pnpm run check:all` על ה-VPS (קריאה בלבד מול ה-DB), ועדכון patch של Node 24 כשיוצא (סעיף "Node").
   5. אחת לרבעון: תרגיל שחזור (סעיף "גיבויים"), בדיקה שהדגם `claude-sonnet-4-6` לא מוכרז להפסקה אצל Anthropic,
      ובדיקה אם הגיע התאריך למחוק את `/var/backups/invoice-node20/` ו-`/var/backups/invoice-nginx/` (1/12/2026).
+     בנוסף, בדיקה אם `typescript-eslint` תומך ב-TypeScript 7: `npm view typescript-eslint peerDependencies.typescript`
+     (קריאה בלבד; ב-2/11/2026 התשובה `>=4.8.4 <6.1.0`, כלומר עדיין לא). אם הטווח כולל 7, ו-`pnpm lint` עובר בענף
+     בדיקה עם `typescript@7`, מסירים את התקרה של `typescript` מ-`.github/renovate.json`, ו-Renovate פותח PR רגיל.
+     אחרי זה מעדכנים את הטבלה "שדרוגים שנדחו בכוונה".
