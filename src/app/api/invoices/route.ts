@@ -48,7 +48,7 @@ const InvoiceWriteSchema = z.object({
   currency: z.string().nullable().optional(),
   payment_method: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
-  source: z.enum(['manual', 'gmail', 'whatsapp', 'folder']).optional(),
+  source: z.enum(['manual', 'gmail', 'whatsapp', 'folder', 'scan']).optional(),
   file_url: z.string().nullable().optional(),
   file_name: z.string().nullable().optional(),
   needs_review: z.boolean().optional(),
