@@ -82,6 +82,8 @@
     "@types/heic-convert": "^2.1.1",
     "eslint": "^10.0.0",
     "eslint-config-next": "^16.2.12",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4.23.15",
     "vite": "^7.3.7",
     "vitest": "^4.1.12"
   }
