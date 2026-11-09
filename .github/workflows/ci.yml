@@ -152,6 +152,32 @@ jobs:
       - run: pnpm run typecheck
 
   # --------------------------------------------------------------------------
+  # Unit tests (vitest): the receipt-scan image pipeline (sharp, HEIC), the crop
+  # geometry and finder, the OCR parse against a stub client, and the save/duplicate
+  # invariants against a fake store. No network, no database, no secrets.
+  # A real run that can fail. NOT a required status check yet: adding it to the
+  # `main-protection` ruleset is a repository-settings change for the owner.
+  # --------------------------------------------------------------------------
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test
+
+  # --------------------------------------------------------------------------
   # eslint. Separate job so lint failures are distinguishable at a glance.
   # --------------------------------------------------------------------------
   lint:
@@ -205,6 +231,10 @@ jobs:
       - name: check:source (code z.enum matches the DB CHECK)
         if: ${{ !cancelled() }}
         run: pnpm run check:source
+
+      - name: check:scan (a scanned receipt takes the same road, duplicate guard included)
+        if: ${{ !cancelled() }}
+        run: pnpm run check:scan
 
   # --------------------------------------------------------------------------
   # check:anon — proves the public anon key cannot read invoices, gmail_tokens
