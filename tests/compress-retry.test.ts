@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { RETRY, TransientAwareError, backoffMs, isTransientStatus, retryStats, withRetry } from '@/lib/compress/retry'
-import { createReadStore, createWriteStore, storageFailure, type BucketLike } from '@/lib/compress/supabase-store'
+import { cacheHeaders, createReadStore, createWriteStore, seconds, storageFailure, type BucketLike } from '@/lib/compress/supabase-store'
 
 // The gateway in front of Storage can drop a request for a few seconds. These tests pin down WHICH failures are
 // retried, how often, how long it waits — and that a permanent failure (wrong key, missing object) fails at once.
@@ -158,5 +158,24 @@ describe('the Storage adapters retry through the gateway', () => {
     })
     await expect(forbidden.upload('x', Buffer.from('a'), { contentType: 'image/jpeg', cacheControl: null })).rejects.toThrow('storage_upload_failed')
     expect(denied).toBe(1)
+  })
+})
+
+describe('an upload keeps the object\'s own Cache-Control', () => {
+  it('"no-cache" (64 objects in the bucket) is sent as "no-cache", not turned into max-age=3600', async () => {
+    const seen: Array<Record<string, string> | undefined> = []
+    const writer = createWriteStore('u', 'k', { retry: { sleep: async () => {} }, bucket: fakeBucket({ upload: async (_p, _b, o) => { seen.push(o.headers); return { error: null } } }) })
+    await writer.upload('invoices/a.jpg', Buffer.from('x'), { contentType: 'image/jpeg', cacheControl: 'no-cache' })
+    await writer.upload('invoices/b.jpg', Buffer.from('x'), { contentType: 'image/jpeg', cacheControl: 'max-age=3600' })
+    await writer.upload('invoices/c.jpg', Buffer.from('x'), { contentType: 'image/jpeg', cacheControl: 'max-age=86400, public' })
+    await writer.upload('invoices/d.jpg', Buffer.from('x'), { contentType: 'image/jpeg', cacheControl: null })
+    expect(seen).toEqual([{ 'cache-control': 'no-cache' }, { 'cache-control': 'max-age=3600' }, { 'cache-control': 'max-age=86400, public' }, undefined])
+  })
+  it('the helpers: verbatim header when there is a value, none when there is not; seconds() is only the fallback number', () => {
+    expect(cacheHeaders('no-cache')).toEqual({ 'cache-control': 'no-cache' })
+    expect(cacheHeaders(null)).toBeUndefined()
+    expect(cacheHeaders('')).toBeUndefined()
+    expect(seconds('no-cache')).toBe('3600')
+    expect(seconds('max-age=120')).toBe('120')
   })
 })

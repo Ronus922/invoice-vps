@@ -20,6 +20,7 @@ import { findMentions } from '../src/lib/compress/orphan-refs'
 import { baseName, checkExpectation, planOrphans, sumBytes, sweepOrphans } from '../src/lib/compress/orphans'
 import { fmtBytes } from '../src/lib/compress/report'
 import { planEntries } from '../src/lib/compress/run'
+import { retryStats } from '../src/lib/compress/retry'
 import { createReadStore, createRemoveStore } from '../src/lib/compress/supabase-store'
 
 const out = (s: string) => process.stdout.write(`${s}\n`)
@@ -93,6 +94,7 @@ async function main(): Promise<number> {
   out(`  Content-Types (first 40): ${[...kinds].map(([k, n]) => `${k} ×${n}`).join(', ')}`)
   out('  sample: ' + plan.orphans.slice(0, 3).map((o) => `${o.path} (${fmtBytes(o.size)}, ${o.createdAt ?? '?'})`).join(' | '))
 
+  const retries = () => out(`Storage calls that needed a retry: ${retryStats.retried} · failed even after 5 tries: ${retryStats.gaveUp}`)
   if (args.report) {
     await mkdir(resolve(args.report, '..'), { recursive: true })
     await writeFile(`${args.report}.json`, JSON.stringify({ total: listing.length, referenced: referenced.size, plan: { candidates: plan.candidates, mentioned: plan.mentioned.map((o) => o.path), tooRecent: plan.tooRecent.map((o) => o.path), orphans: plan.orphans } }, null, 1))
@@ -107,7 +109,10 @@ async function main(): Promise<number> {
     }
     out('expectation met (count and volume within tolerance)')
   }
-  if (!args.del) return 0
+  if (!args.del) {
+    retries()
+    return 0
+  }
   if (plan.orphans.length === 0) {
     out('nothing to delete')
     return 0
@@ -147,6 +152,7 @@ async function main(): Promise<number> {
   }
   const backupFile = join(backup.root, 'originals.tar.gz')
   out(`backup kept: ${backupFile} (remove it after 7 days)`)
+  retries()
   return still.length === 0 && countOk && bytesOk && sampleOk ? 0 : 1
 }
 

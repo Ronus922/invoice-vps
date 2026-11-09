@@ -22,6 +22,7 @@ import { loadEnv, parseArgs, readRows } from '../src/lib/compress/cli'
 import { popplerStatus } from '../src/lib/compress/pdf-verify'
 import { describe, fmtBytes, notReplaced, renderSkipReasons, renderSummary, summaryOf, toTsv, topSavings } from '../src/lib/compress/report'
 import { finishApply, planEntries, realEngines, runCompression, type ApplyContext } from '../src/lib/compress/run'
+import { retryStats } from '../src/lib/compress/retry'
 import { createReadStore, createWriteStore } from '../src/lib/compress/supabase-store'
 
 const out = (s: string) => process.stdout.write(`${s}\n`)
@@ -83,6 +84,8 @@ async function main(): Promise<number> {
   for (const r of topSavings(result.reports, 5)) out(`  ${describe(r)}`)
   out('\nSkipped / failed worth a look:')
   for (const r of notReplaced(result.reports, 5)) out(`  ${describe(r)}`)
+
+  out(`\nStorage calls that needed a retry: ${retryStats.retried} · calls that failed even after 5 tries: ${retryStats.gaveUp}`)
 
   // The report is written BEFORE the backup is judged: it is the list of exactly which objects were replaced.
   if (args.report) {

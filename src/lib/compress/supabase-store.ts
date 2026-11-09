@@ -28,7 +28,7 @@ interface ListEntry {
 export interface BucketLike {
   list(prefix: string, opts: { limit: number; offset: number; sortBy: { column: string; order: string } }): Promise<{ data: ListEntry[] | null; error: Failure | null }>
   download(path: string): Promise<{ data: Blob | null; error: Failure | null }>
-  upload(path: string, body: Buffer, opts: { upsert: boolean; contentType: string; cacheControl: string }): Promise<{ error: Failure | null }>
+  upload(path: string, body: Buffer, opts: { upsert: boolean; contentType: string; cacheControl: string; headers?: Record<string, string> }): Promise<{ error: Failure | null }>
   remove(paths: string[]): Promise<{ error: Failure | null }>
 }
 
@@ -41,10 +41,17 @@ function bucketOf(url: string, key: string): BucketLike {
   return createClient(url, key, { auth: { persistSession: false } }).storage.from(BUCKET) as unknown as BucketLike
 }
 
-/** `cacheControl` comes back as "max-age=3600"; upload() wants the bare seconds. An unreadable value falls back to the
- *  bucket default instead of `undefined`, which storage-js would send as the literal header "max-age=undefined". */
+/** upload() wants the bare seconds of `max-age`. An unreadable value falls back to the bucket default instead of
+ *  `undefined`, which storage-js would send as the literal header "max-age=undefined". This is only the fallback: the
+ *  object's own Cache-Control is sent verbatim in `headers` (see cacheHeaders), because "no-cache" — the Storage default
+ *  for an upload that sent none, and what 64 of the bucket's objects carry — cannot be written as a number of seconds. */
 export function seconds(cacheControl: string | null): string {
   return /max-age=(\d+)/.exec(cacheControl ?? '')?.[1] ?? '3600'
+}
+
+/** storage-js applies `headers` AFTER it sets its own `cache-control: max-age=<cacheControl>`, so this wins. */
+export function cacheHeaders(cacheControl: string | null): Record<string, string> | undefined {
+  return cacheControl ? { 'cache-control': cacheControl } : undefined
 }
 
 /** A failed storage call as an Error that knows whether another try can help. */
@@ -102,7 +109,8 @@ export function createWriteStore(url: string, key: string, deps: StoreDeps = {})
   return {
     upload: (path, bytes, opts) =>
       withRetry(async () => {
-        const { error } = await bucket.upload(path, bytes, { upsert: true, contentType: opts.contentType, cacheControl: seconds(opts.cacheControl) })
+        const headers = cacheHeaders(opts.cacheControl)
+        const { error } = await bucket.upload(path, bytes, { upsert: true, contentType: opts.contentType, cacheControl: seconds(opts.cacheControl), ...(headers ? { headers } : {}) })
         if (error) throw storageFailure('upload', error)
       }, deps.retry),
   }
