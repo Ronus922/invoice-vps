@@ -13,6 +13,7 @@
 | `check:secrets` | `check-no-secrets.mjs` | דליפת מפתחות ל-git — אף ערך מ-`.env.local` (service-role, Anthropic, Gmail, CRON, DB) לא מופיע בקובץ במעקב, ואין `.env` במעקב (מלבד `*.example`). |
 | `check:auth` | `check-api-auth.mjs` | route חשוף — כל handler תחת `src/app/api/**` חייב `getAuthenticatedUser()` או `CRON_SECRET`. (יוצא דופן מותר: `auth/logout`.) קריטי כי ה-routes משתמשים ב-service-role שעוקף RLS. |
 | `check:source` | `check-source-enum.mjs` | drift בין הקוד למסד — ערכי `source` ב-`z.enum` של route החשבוניות חייבים להיות זהים ל-`CHECK` במסד (migration). ערך שהקוד שולח והמסד לא מכיר → כל insert כזה נדחה בשקט. בדיקה סטטית (קבצים בלבד, ללא DB). |
+| `check:scan` | `check-scan-pipeline.mjs` | סריקת קבלה שעוקפת את הצינור — סטטי (קבצים בלבד): הסדר בדיקת כפילות ← שמירת צילום ← הכנסה; `finalizeInvoicePayload` ו-`validateInvoiceArithmetic` על כל שורה שנסרקה; `23505` מדווח ככפילות ולא נבלע; כותב יחיד ל-`invoices` מהסריקה; ש-`POST /api/invoices` עדיין משתמש באותה פונקציה. ההתנהגות עצמה מוכחת ב-`tests/scan-save.test.ts`. |
 | `check:anon` | `check-anon-isolation.mjs` | חשיפת נתונים ל-anon — קורא בפועל עם ה-anon key מ-`invoices`, `gmail_tokens`, `scanned_emails` ומוודא **0 שורות**. מגן מדליפת חשבוניות (כסף) ו-refresh token של Gmail. |
 | `check:money` | `check-money-balanced.mjs` | **שגיאה כספית שקטה** — אין חשבונית לא-מאוזנת (`total≤0`, או `pretax+vat≠total` מעבר לסובלנות `max(0.05, total·0.5%)`) שאינה מסומנת `needs_review`. חוזה המערכת: לא-מאוזן ⟹ needs_review. חשבונית לא-מאוזנת **מסומנת** = תקין. |
 | `check:currency` | `check-currency-valid.mjs` | חשבונית זרה שנשמרה כ-₪ — לכל רשומה קוד מטבע ISO-4217 תקין (`^[A-Z]{3}$`). |
@@ -21,7 +22,8 @@
 
 ### הרצה בודדת
 ```bash
-npm run check:money      # או check:secrets / check:auth / check:source / check:anon / check:currency / check:review / check:dupes
+npm run check:money      # או check:secrets / check:auth / check:source / check:scan / check:anon / check:currency / check:review / check:dupes
+npm test                 # בדיקות יחידה (vitest): צינור התמונה, חיתוך, OCR מול stub, שמירה וכפילות מול store מזויף — בלי DB ובלי רשת
 npm run check:all        # typecheck + lint + כל הבדיקות, עוצר על הכישלון הראשון
 ```
 
@@ -128,6 +130,10 @@ create unique index concurrently invoices_vendor_docnum_doctype_uniq
    של Anthropic עם **אותו מספר** (doc_type שונה) — **שתיהן** נשמרות, לא ככפילות.
 9. **סריקת Gmail** — הרץ "סרוק Gmail", ואז הרץ שוב מיד. צפוי: הריצה השנייה
    מדווחת 0 חדשות / כפילויות, בלי רשומות כפולות בטבלה.
+
+10. **סריקת קבלה (אייפון)** — `/scan` ← "צלם קבלה" ← מסגרת החיתוך על הקבלה (גרור פינות, צביטה לזום; קבלה ארוכה: מסגרת גבוהה וצרה) ← "המשך". צפוי: טופס מלא; שדה לא בטוח צהוב עם "בדוק". תקן, "אשר ושמור". צפוי: שורה חדשה עם התג "סריקה", ואם לא סומנה לבדיקה — "נשלחה לרואה החשבון".
+11. **כפילות בסריקה** — סרוק שוב את אותה קבלה (או שנה בטופס למספר/ספק קיים). צפוי: באנר אדום עם פרטי המסמך הקיים **לפני** השמירה, וכפתור השמירה חסום; לא נוצרת שורה שנייה.
+12. **הורדה** — בכרטיס "הקבלה נשמרה" לחץ "הורד". צפוי: קובץ `{ספק}_{מספר}_{תאריך}.jpg` שנפתח בכל מחשב, בלי מיקום GPS (בדוק בתכונות הקובץ).
 
 ## הכלל
 

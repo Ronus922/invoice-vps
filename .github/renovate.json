@@ -49,6 +49,11 @@
       "allowedVersions": "<11"
     },
     {
+      "description": "Deferred on purpose: vite 8 runs on rolldown >= 1.2.18, whose native binding dies with SIGILL on the VPS CPU (Xeon E5-2667 v2, no AVX2), so vitest cannot run there at all. CI would stay green (hosted runners have AVX2), which is exactly why it is capped. Return condition: docs/RUNBOOK.md, section on deferred upgrades",
+      "matchPackageNames": ["vite"],
+      "allowedVersions": "<8"
+    },
+    {
       "description": "react and react-dom must move together, in their own PR",
       "matchPackageNames": ["react", "react-dom"],
       "groupName": "react",
