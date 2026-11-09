@@ -44,6 +44,14 @@ function blobFromBase64(b64: string, type: string): Blob {
   return new Blob([bytes], { type })
 }
 
+// Why /api/send-to-accountant did not send (its `reason` / `error` strings), in words Ronen can act on.
+function sendFailureText(note: string): string {
+  if (note === 'no_accountant_email') return 'לא הוגדר מייל רואה חשבון בהגדרות'
+  if (note === 'gmail_not_connected') return 'חשבון ה-Gmail לא מחובר'
+  if (note === 'network') return 'אין חיבור'
+  return 'שגיאת שליחה'
+}
+
 const card = 'rounded-2xl border p-4'
 const cardStyle = { background: 'var(--panel)', borderColor: 'var(--border)' } as const
 
@@ -411,7 +419,7 @@ export default function ScanScreen() {
             style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}
           >
             <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-3">
-              <Button type="button" variant="outline" onClick={retake} disabled={saving} className="h-11 px-4 py-2">
+              <Button type="button" variant="outline" onClick={reset} disabled={saving} className="h-11 px-4 py-2" data-testid="scan-cancel">
                 בטל
               </Button>
               <Button type="button" onClick={() => void save()} disabled={saving || duplicate !== null} className="h-11 flex-1 gap-2 px-4 py-2 text-base font-bold" data-testid="scan-save">
@@ -441,7 +449,7 @@ export default function ScanScreen() {
               <p className="m-0 text-sm" style={{ color: 'var(--accent)' }}>נשלחה לרואה החשבון.</p>
             ) : (
               <p className="m-0 text-sm text-amber-300">
-                נשמרה, אבל לא נשלחה לרואה החשבון ({saved.sendNote}). היא תופיע בבאנר „טרם נשלחו” ותישלח משם.
+                נשמרה, אבל לא נשלחה לרואה החשבון — {sendFailureText(saved.sendNote)}. היא תופיע בטבלה ובבאנר „חשבוניות לא נשלחו” ותישלח משם.
               </p>
             )}
             <a
