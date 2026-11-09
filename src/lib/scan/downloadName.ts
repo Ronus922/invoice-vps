@@ -40,6 +40,17 @@ export function receiptFileName({ vendor, docNumber, docDate }: ReceiptNameInput
   return `${parts.length > 0 ? parts.join('_') : 'receipt'}.jpg`
 }
 
+/** The name kept in `invoices.file_name` — the e-mail attachment, the Drive backup and the ZIP export all key on it.
+ *  The download button saves the plain {vendor}_{doc_number}_{doc_date}.jpg (receiptFileName), but a receipt and a
+ *  tax invoice of the same vendor can carry the same number and date (two legitimate identities), and the Drive
+ *  backup adopts an existing file of the same name while the ZIP export overwrites it. So the stored name adds the
+ *  document type, exactly like the exporters' own fallback name does (`_${doc_type}` unless 'unknown'). */
+export function receiptStoredName({ docType, ...rest }: ReceiptNameInput & { docType: string | null | undefined }): string {
+  const base = receiptFileName(rest).replace(/\.jpg$/, '')
+  const type = docType && docType !== 'unknown' && /^[a-z_]{1,20}$/.test(docType) ? `_${docType}` : ''
+  return `${base}${type}.jpg`
+}
+
 /** RFC 5987 `attr-char`: everything encodeURIComponent leaves alone EXCEPT `' ( ) *`, which it does not
  *  escape but which are not legal in `filename*=` (an unescaped `'` also reads as the charset delimiter). */
 export function encodeRfc5987(value: string): string {

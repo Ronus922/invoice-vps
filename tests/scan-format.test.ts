@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   formatAmount, fromStoredDate, lowConfidenceFields, normalizeConfidence, parseAmount, toIsoDate, toSavePayload, toStoredDate,
+  vatStillDerived,
 } from '@/lib/scan/format'
 import { EMPTY_SCAN_VALUES, OCR_LOW_CONFIDENCE, scanTargetSize, type ScanValues } from '@/lib/scan/model'
 
@@ -29,6 +30,9 @@ describe('amounts', () => {
     expect(parseAmount('12.90')).toBe(12.9)
     expect(parseAmount('-104.1')).toBe(-104.1) // credit notes are negative and valid
     expect(parseAmount('₪ 45')).toBe(45)
+    expect(parseAmount('1.234,56')).toBe(1234.56) // the last separator is the decimal point, whichever it is
+    expect(parseAmount('1,234.56')).toBe(1234.56)
+    expect(parseAmount('12,345,678')).toBe(12345678)
   })
   it('returns null for nothing or junk — never 0', () => {
     for (const bad of ['', '  ', '-', 'abc', '.']) expect(parseAmount(bad)).toBeNull()
@@ -76,5 +80,28 @@ describe('the save payload', () => {
     const body = toSavePayload(values, { description: 'מצרכים', category: 'אחר' }, { ok: true, fields: values })
     expect(body).toMatchObject({ vendor: 'שופרסל', total: 45, pretax: 38.14, vat: 6.86, date: '2026-11-09', ocr_ok: true })
     for (const forbidden of ['source', 'scanned_by', 'needs_review', 'created_by', 'file_url', 'id']) expect(body).not.toHaveProperty(forbidden)
+  })
+})
+
+describe('a VAT pair the OCR only DERIVED is derived again on save, from the final date / currency / total', () => {
+  const ocrFields: ScanValues = { ...EMPTY_SCAN_VALUES, doc_type: 'receipt', vendor: 'A', doc_number: '1', date: '2025-03-01', pretax: '100.00', vat: '18.00', total: '118.00' }
+  const send = (values: ScanValues, vatDerived = true) =>
+    toSavePayload(values, { description: '', category: '' }, { ok: true, fields: ocrFields, vatDerived, readAmounts: { pretax: null, vat: null } })
+
+  it('untouched derived amounts are sent as "not provided" so the server derives (and records) them', () => {
+    expect(vatStillDerived(ocrFields, { vatDerived: true, fields: ocrFields })).toBe(true)
+    expect(send(ocrFields)).toMatchObject({ pretax: null, vat: null, total: 118, ocr_read: { pretax: null, vat: null } })
+  })
+  it('a corrected date or total therefore never keeps the old split', () => {
+    expect(send({ ...ocrFields, date: '2024-03-01' })).toMatchObject({ pretax: null, vat: null, date: '2024-03-01' }) // 17% era: derived again server-side
+    expect(send({ ...ocrFields, total: '236.00' })).toMatchObject({ pretax: null, vat: null, total: 236 })
+  })
+  it('amounts Ronen typed over are his, and are sent as typed', () => {
+    expect(send({ ...ocrFields, vat: '17.00' })).toMatchObject({ pretax: 100, vat: 17 })
+    expect(send({ ...ocrFields, pretax: '101.00' })).toMatchObject({ pretax: 101, vat: 18 })
+  })
+  it('amounts the OCR actually READ are never re-derived', () => {
+    expect(vatStillDerived(ocrFields, { vatDerived: false, fields: ocrFields })).toBe(false)
+    expect(send(ocrFields, false)).toMatchObject({ pretax: 100, vat: 18 })
   })
 })

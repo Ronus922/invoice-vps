@@ -45,7 +45,9 @@ export async function findDuplicateIn(
   const docNumber = key.docNumber.trim()
   if (docNumber === '') return null // the unique index ignores rows without a number, so there is no identity to compare
   const docType = normalizeDocType(key.docType)
-  const { data, error } = await db.from('invoices').select(DUP_COLUMNS).eq('doc_number', docNumber).eq('doc_type', docType).limit(50)
+  // 1000 = PostgREST's own row ceiling: the lookup must see EVERY row that shares the number and type, or a match
+  // beyond an arbitrary first page would let a duplicate through (legacy rows are not covered by the unique index).
+  const { data, error } = await db.from('invoices').select(DUP_COLUMNS).eq('doc_number', docNumber).eq('doc_type', docType).limit(1000)
   if (error) throw new Error(`duplicate_lookup_failed:${error.code ?? 'unknown'}`)
   const wanted = normalizeVendorName(key.vendor)
   const hit = (data ?? []).find((r) => normalizeVendorName(String(r.vendor ?? '')) === wanted)
@@ -90,10 +92,20 @@ export function supabaseScanStore(): ScanStore {
   }
 }
 
-/** The stored photo of a scanned row, for the authenticated image route. null when the object is gone. */
+/** The only object path a scan ever stores: invoices/<uuid>.jpg (see uploadPhoto). */
+const SCAN_OBJECT_PATH = /^invoices\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/
+
+export function isScanObjectPath(path: string | null): path is string {
+  return path !== null && SCAN_OBJECT_PATH.test(path)
+}
+
+/** The stored photo of a scanned row, for the authenticated image route. null when the object is gone — or when
+ *  the row's file_url does not point at an object of the exact shape a scan stores. `source` is a column the one
+ *  authenticated user can also write through POST/PATCH /api/invoices, so the path SHAPE (no `..`, no other
+ *  folder, no other bucket) is what keeps this route from reading anything else; the source filter alone does not. */
 export async function downloadScanPhoto(fileUrl: string): Promise<Buffer | null> {
   const path = storagePathFromFileUrl(fileUrl)
-  if (!path) return null
+  if (!isScanObjectPath(path)) return null
   const { data, error } = await admin().storage.from(BUCKET).download(path)
   if (error || !data) return null
   return Buffer.from(await data.arrayBuffer())
@@ -108,6 +120,7 @@ export async function getScanRow(id: string): Promise<{
     .select('id, vendor, doc_number, date, file_url')
     .eq('id', id)
     .eq('source', 'scan')
+    .not('scanned_by', 'is', null) // only a scan sets this: POST/PATCH /api/invoices strip it (not in their schema)
     .maybeSingle()
   return (data as { id: string; vendor: string | null; doc_number: string | null; date: string | null; file_url: string | null } | null) ?? null
 }

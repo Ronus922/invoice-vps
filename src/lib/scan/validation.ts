@@ -24,6 +24,8 @@ export const scanSaveSchema = z.object({
   category: z.string().trim().max(60).default(''),
   /** What the OCR read, before Ronen's edits — kept in extraction_raw for audit. Bounded. */
   ocr_ok: z.boolean().default(false),
+  /** pretax / vat as the model READ them (before the derivation) — recorded as `original` when the server derives. */
+  ocr_read: z.object({ pretax: money.nullable(), vat: money.nullable() }).nullable().optional(),
   ocr_fields: z
     .record(z.string(), z.unknown())
     .optional()

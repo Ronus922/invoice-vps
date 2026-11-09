@@ -25,7 +25,7 @@
 ## OCR (`src/lib/scan/ocr.ts`)
 אותה קריאה בדיוק שמחלצת חשבוניות מהמייל ומהעלאה ידנית: `tool_use` כפוי על `return_invoice`, אותו מודל (`INVOICE_EXTRACTION_MODEL`), אותו `max_tokens`, אותו פרומפט (`INVOICE_EXTRACTION_PROMPT`). אין פרסר JSON חדש — התשובה היא `tool_use.input`.
 **התוספת היחידה, אדיטיבית:** `SCAN_EXTRACTION_TOOL` = `return_invoice` + `vendor_tax_id` + `confidence` (אובייקט 0–1 לכל שדה), שניהם אופציונליים, ופסקה אחת שמצורפת לפרומפט. `EXTRACTION_TOOL` ו-`INVOICE_EXTRACTION_PROMPT` לא שונו, ולכן חילוץ Gmail/ידני התנהגותו זהה. בדיקה (`tests/scan-ocr.test.ts`) מוודאת שכל מאפיין של הכלי הקיים נשמר זהה.
-אחרי הקריאה: אותו עיבוד שיש ב-`/api/extract-invoice` — `normalizeCurrency`, `normalizeDocType`, `deriveVatFromTotal` (מע"מ חסר / לא מתאים ← נגזר מהסכום הסופי, לפי החלטת רונן).
+אחרי הקריאה: אותו עיבוד שיש ב-`/api/extract-invoice` — `normalizeCurrency`, `normalizeDocType`, `deriveVatFromTotal` (מע"מ חסר / לא מתאים ← נגזר מהסכום הסופי, לפי החלטת רונן). הטופס מוצג עם הערכים הנגזרים, ולכן **אם רונן לא נגע בלפני-מע"מ ובמע"מ, השמירה שולחת אותם כ-"לא נקראו" והשרת גוזר מחדש** מהסכום, התאריך והמטבע הסופיים (תאריך שתוקן מ-2025 ל-2024 נגזר ב-17%, מטבע זר מקבל מע"מ 0) ורושם `vat_derived` ו-`vat_derivation` עם מה שהמודל באמת קרא. ערך שרונן הקליד נשמר כמו שהוא.
 שמות השדות הם של טבלת `invoices` (`date` = תאריך המסמך, `pretax` = לפני מע"מ). התאריך בטופס `YYYY-MM-DD`, ובטבלה `DD/MM/YYYY` כמו כל שורה קיימת.
 
 ## שמירה (`saveScannedReceipt`, `src/lib/scan/save.ts`)
@@ -33,13 +33,13 @@
 1. **זהות** `(vendor, doc_number, doc_type)` נבדקת **קודם** — התנגשות חוזרת ל-409 עם המסמך הקיים והצילום אפילו לא נשמר. ההשוואה כוללת גם איות ספק שנבדל באותיות / מרכאות / רווחים בלבד (`normalizeVendorName`), כי ה-OCR מאייתת אותו ספק אחרת מדי פעם. בלי מספר מסמך אין זהות להשוות (האינדקס הייחודי מתעלם משורות כאלה).
 2. הצילום מאומת ונשמר באקט פרטי: `invoices/<uuid>.jpg`, `Content-Type: image/jpeg`.
 3. השורה עוברת `finalizeInvoicePayload` — **אותה פונקציה** ש-`POST /api/invoices` משתמש בה (doc_type קנוני, שער "מסמך שאינו חשבונית" ← `needs_review`, השלמת ספק/מספר חסרים ← `needs_review`, נגזרת מע"מ) — ואז `validateInvoiceArithmetic`. שורה שלא מתאזנת ← `needs_review` ולא נשלחת לרו"ח.
-4. `source='scan'`, `scanned_by` = המשתמש מה-session (שום ערך מהגוף), `created_by`, `image_bytes`, `vendor_tax_id`, `file_name`.
+4. `source='scan'`, `scanned_by` = המשתמש מה-session (שום ערך מהגוף), `created_by`, `image_bytes`, `vendor_tax_id`, `file_name`. **`file_name` כולל את סוג המסמך** (`{ספק}_{מספר}_{תאריך}_{doc_type}.jpg`, בלי הסיומת כשהסוג `unknown`): חשבונית מס וקבלה של אותו ספק עם אותו מספר ותאריך הן שתי זהויות לגיטימיות, וגיבוי Drive "מאמץ" קובץ באותו שם בעוד ייצוא ה-ZIP דורס אותו. זה גם שם הקובץ המצורף במייל לרו"ח.
 5. הכנסה. התנגשות באינדקס הייחודי (`23505`, מרוץ שהבדיקה לא ראתה) ← הצילום נמחק שוב ← 409. כשל הכנסה אחר ← הצילום נמחק ← 500.
 `scripts/check-scan-pipeline.mjs` (`npm run check:scan`) נכשל אם אחד מאלה נעלם: הסדר lookup ← upload ← insert, `finalizeInvoicePayload`, `validateInvoiceArithmetic`, טיפול ב-23505, כותב יחיד ל-`invoices` מהסריקה, ושימוש של `POST /api/invoices` באותה פונקציה.
 
 ## הגשה והורדה
-`GET /api/scan/[id]/image` — השרת **מזרים** את הבייטים מהבאקט הפרטי (service role) ל-`Content-Type: image/jpeg`, `Cache-Control: private, no-store`. ללקוח לא מגיע שום signed URL או URL ציבורי. מוגש רק `source='scan'` (שאר המסמכים ממשיכים ב-`/api/file` הקיים, שמפנה ל-signed URL קצר) — כך שהראוט לא הופך ל-proxy כללי.
-`?download=1` ← `Content-Disposition: attachment` ושם הקובץ `{vendor}_{doc_number}_{doc_date}.jpg` (תאריך המסמך `YYYY-MM-DD`). עברית לפי RFC 5987 (`filename*=UTF-8''…`), **גם `' ( ) *` מקודדים** (`encodeURIComponent` משאיר אותם, והם שברו את `filename*=` ב-Billing), עם `filename=` ב-ASCII כגיבוי. תווים אסורים בשם קובץ, תווי בקרה וסימוני כיוון — `_` או נמחקים; עד 32 תווים לכל חלק. אותו שם נשמר ב-`invoices.file_name` ולכן הוא גם שם הקובץ המצורף במייל לרו"ח.
+`GET /api/scan/[id]/image` — השרת **מזרים** את הבייטים מהבאקט הפרטי (service role) ל-`Content-Type: image/jpeg`, `Cache-Control: private, no-store`. ללקוח לא מגיע שום signed URL או URL ציבורי. מוגשות רק שורות עם `source='scan'` **ו-`scanned_by` מלא** (שדה ש-`POST`/`PATCH /api/invoices` מסירים) **ו-`file_url` שמצביע על אובייקט בדיוק בצורה `invoices/<uuid>.jpg`** (`isScanObjectPath`: בלי `..`, בלי תיקייה או באקט אחר). הבדיקה האחרונה היא זו שמחזיקה את הקו: `source` ניתן לכתיבה דרך `/api/invoices` על ידי המשתמש המאומת, ולכן הוא לבדו אינו גבול. שאר המסמכים ממשיכים ב-`/api/file` הקיים (שמפנה ל-signed URL קצר).
+`?download=1` ← `Content-Disposition: attachment` ושם הקובץ `{vendor}_{doc_number}_{doc_date}.jpg` (תאריך המסמך `YYYY-MM-DD`; בלי סוג המסמך, כפי שנדרש). עברית לפי RFC 5987 (`filename*=UTF-8''…`), **גם `' ( ) *` מקודדים** (`encodeURIComponent` משאיר אותם, והם שברו את `filename*=` ב-Billing), עם `filename=` ב-ASCII כגיבוי. תווים אסורים בשם קובץ, תווי בקרה וסימוני כיוון — `_` או נמחקים; עד 32 תווים לכל חלק. ב-`invoices.file_name` (ולכן במייל לרו"ח) נשמר אותו שם עם סוג המסמך (ראה "שמירה"), ולא השם שבהורדה.
 
 ## נתונים (מיגרציה `supabase/migrations/20261109_add_receipt_scan.sql`)
 אדיטיבית בלבד: `invoices_source_check` מתרחב ל-`'scan'`, ושלוש עמודות nullable — `scanned_by uuid`, `image_bytes integer`, `vendor_tax_id text`. אף שורה לא נוגעת. **מיושמת ידנית** (המשתמש `invoice_app` אינו בעל הטבלה):
@@ -47,10 +47,17 @@
 **חייבת להיות מיושמת לפני הפריסה** — בלעדיה כל שמירה נכשלת (ה-CHECK דוחה `'scan'`). `check:source` שומר שה-`z.enum` שבקוד זהה ל-CHECK.
 
 ## מגבלות
-- תמונה עד 15MB (nginx ו-`proxyClientMaxBodySize` על 20MB). נתמכים jpeg / png / webp / heif / avif; SVG ו-GIF נדחים (415).
+- תמונה עד 15MB (nginx ו-`proxyClientMaxBodySize` על 20MB) ועד 50 מגה-פיקסל לכל פענוח (413). הדפדפן שולח חיתוך של עד 2000px, כך שזה רחוק ממה שנשלח בפועל; HEIC מוגבל בנפרד ל-25MP. נתמכים jpeg / png / webp / heif / avif; SVG ו-GIF נדחים (415).
+- בדיקת הכפילות מביאה עד 1000 שורות (תקרת PostgREST) עם אותו מספר וסוג, כדי שלא תוחמץ כפילות מחוץ לעמוד ראשון שרירותי (שורות legacy לא מכוסות באינדקס הייחודי).
 - אין rate-limit על ה-OCR: יש משתמש מורשה אחד (ב-Billing יש 60 ל-10 דקות, כי שם יש כמה שומרים). כל קריאה היא קריאת vision בתשלום על מפתח המערכת.
 - הפענוח של HEIC רץ על ה-event loop (≈1.6s ו-+230MB ל-12MP), פענוח אחד בכל רגע. נתיב נדיר.
 - קבלה בלי מספר מסמך נשמרת עם `needs_review` ולא נשלחת, וגם לא ניתן לזהות בה כפילות.
+
+### סיכונים ידועים שהוחלט לא לטפל בהם (ביקורת אבטחה, 9/11/2026)
+- **טקסט שמודפס על הקבלה** (prompt injection) יכול להשפיע על `description` ו-`category` (שלא מוצגים בטופס, ו-`category` נזכרת לספק ב-localStorage, בדיוק כמו בהעלאה ידנית) ועל ה-`confidence` (מכבה את הצהוב). אין הסלמה: כלי יחיד, `tool_choice` כפוי, בלי רשת, והפלט מנוקה ומוקלד; כל היעדים (ייצוא CSV/HTML, נושא המייל) מקודדים. ההשפעה היא שלמות נתונים בלבד.
+- **כותרת HEIC מתחזה:** גודל ה-`ispe` שהקובץ מצהיר עליו יכול להיות קטן מממדי ה-bitstream. ההגנה היחידה אחריו היא המגבלות של libheif וה-WASM, והפענוח חוסם את ה-event loop. דורש משתמש מאומת שמעלה קובץ מעוצב.
+- **שמות קבצים בעברית בכותרות MIME** של המייל לרו"ח נכתבים כ-UTF-8 גולמי (`src/lib/accountant-send.ts`, קוד קיים ומשותף לכל המסלולים, לא שונה). לא אומת אצל הרו"ח; נבדק רק בשליחת בדיקה אחת, באישור. אם השם משובש: `filename*=UTF-8''…` בקובץ המשותף, כשינוי נפרד.
+- **אין rate-limit על `/api/scan/ocr`** (ראו למעלה). cookie גנוב היה מאפשר הוצאה בלתי מוגבלת על המפתח; החלטה של רונן אם להוסיף token bucket בזיכרון.
 - קבלה שנשמרה לא ניתנת לחיתוך מחדש (ב-Billing יש "חתוך מחדש" לאדמין; כאן אין, ולא התבקש).
 
 ## בדיקות

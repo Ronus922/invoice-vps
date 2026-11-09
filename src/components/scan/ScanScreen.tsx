@@ -9,7 +9,7 @@ import UploadZone from '@/components/invoices/UploadZone'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { formatCurrency } from '@/lib/format'
 import { applyRememberedCategory, rememberVendorCategory } from '@/lib/vendor-category-memory'
-import { lowConfidenceFields, parseAmount, toSavePayload } from '@/lib/scan/format'
+import { lowConfidenceFields, parseAmount, toSavePayload, vatStillDerived } from '@/lib/scan/format'
 import {
   DOC_TYPE_LABELS, EMPTY_SCAN_VALUES, type DuplicateInfo, type OcrResponse, type ScanPassthrough, type ScanValues,
 } from '@/lib/scan/model'
@@ -68,6 +68,8 @@ export default function ScanScreen() {
 
   const [ocrOk, setOcrOk] = useState(true)
   const [ocrFields, setOcrFields] = useState<ScanValues>(EMPTY_SCAN_VALUES)
+  const [vatDerivedByOcr, setVatDerivedByOcr] = useState(false)
+  const [readAmounts, setReadAmounts] = useState<{ pretax: number | null; vat: number | null }>({ pretax: null, vat: null })
   const [passthrough, setPassthrough] = useState<ScanPassthrough>({ description: '', category: '' })
   const [imageB64, setImageB64] = useState('')
   const [imageType, setImageType] = useState('image/jpeg')
@@ -130,6 +132,8 @@ export default function ScanScreen() {
       setImageBytes(data.image_bytes ?? 0)
       setOcrOk(data.ok === true)
       setOcrFields(data.fields)
+      setVatDerivedByOcr(data.vat_derived === true)
+      setReadAmounts(data.read_amounts ?? { pretax: null, vat: null })
       setPassthrough(pass)
       setValues(data.fields)
       setLowSet(lowConfidenceFields(data.fields, data.confidence ?? {}))
@@ -196,7 +200,7 @@ export default function ScanScreen() {
     try {
       const fd = new FormData()
       fd.append('image', blobFromBase64(imageB64, imageType), 'receipt.jpg')
-      fd.append('data', JSON.stringify(toSavePayload(values, passthrough, { ok: ocrOk, fields: ocrFields })))
+      fd.append('data', JSON.stringify(toSavePayload(values, passthrough, { ok: ocrOk, fields: ocrFields, vatDerived: vatDerivedByOcr, readAmounts })))
       const r = await fetch('/api/scan/save', { method: 'POST', body: fd, credentials: 'include' })
       const data = (await r.json().catch(() => ({}))) as {
         error?: string
@@ -261,6 +265,8 @@ export default function ScanScreen() {
   const total = parseAmount(values.total)
   const vatHint = (() => {
     if (total === null || total === 0) return null
+    // Still the OCR's own derivation → the server derives again from the final total / date / currency.
+    if (vatStillDerived(values, { vatDerived: vatDerivedByOcr, fields: ocrFields })) return 'המע״מ ייחשב אוטומטית מהסכום הסופי (לא נקרא מהקבלה).'
     return deriveVatFromTotal({
       pretax: parseAmount(values.pretax), vat: parseAmount(values.vat), total, currency: values.currency,
       date: values.date ? values.date.split('-').reverse().join('/') : null,

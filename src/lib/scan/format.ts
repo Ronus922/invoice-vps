@@ -44,8 +44,14 @@ export function fromStoredDate(stored: string | null | undefined): string {
 export function parseAmount(raw: string): number | null {
   const s = raw.trim().replace(/[^\d.,-]/g, '')
   if (s === '' || s === '-') return null
-  // A lone comma with no dot and 1–2 digits after it is a decimal comma; otherwise commas are thousands separators.
-  const normalized = /^-?\d+,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '')
+  // Both separators present: the LAST one is the decimal point ("1.234,56" and "1,234.56" are the same amount).
+  // A lone comma with 1–2 digits after it is a decimal comma; otherwise commas are thousands separators.
+  let normalized: string
+  if (s.includes(',') && s.includes('.')) {
+    normalized = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '')
+  } else {
+    normalized = /^-?\d+,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '')
+  }
   const n = Number(normalized)
   return Number.isFinite(n) ? n : null
 }
@@ -71,20 +77,29 @@ export function lowConfidenceFields(values: ScanValues, confidence: ScanConfiden
   return out
 }
 
+/** True while pretax AND vat are still exactly what the OCR's VAT derivation filled in (and nobody typed over
+ *  either): they are then a computed value, not a read one, and must be derived AGAIN from the final total, date
+ *  and currency — a corrected date or currency must not keep the old rate. */
+export function vatStillDerived(values: ScanValues, ocr: { vatDerived: boolean; fields: ScanValues }): boolean {
+  return ocr.vatDerived && values.pretax === ocr.fields.pretax && values.vat === ocr.fields.vat
+}
+
 /** The body POST /api/scan/save takes as `data` (see scanSaveSchema): what Ronen approved in the form. */
 export function toSavePayload(
   values: ScanValues,
   passthrough: ScanPassthrough,
-  ocr: { ok: boolean; fields: ScanValues },
+  ocr: { ok: boolean; fields: ScanValues; vatDerived?: boolean; readAmounts?: { pretax: number | null; vat: number | null } },
 ) {
+  // Derived and untouched → hand the server "no pretax / vat" so it derives (and records vat_derived) itself.
+  const rederive = vatStillDerived(values, { vatDerived: ocr.vatDerived ?? false, fields: ocr.fields })
   return {
     doc_type: values.doc_type,
     vendor: values.vendor.trim(),
     vendor_tax_id: values.vendor_tax_id.trim(),
     doc_number: values.doc_number.trim(),
     date: values.date,
-    pretax: parseAmount(values.pretax),
-    vat: parseAmount(values.vat),
+    pretax: rederive ? null : parseAmount(values.pretax),
+    vat: rederive ? null : parseAmount(values.vat),
     total: parseAmount(values.total),
     currency: values.currency,
     payment_method: values.payment_method.trim(),
@@ -92,5 +107,6 @@ export function toSavePayload(
     category: passthrough.category,
     ocr_ok: ocr.ok,
     ocr_fields: { ...ocr.fields },
+    ocr_read: ocr.readAmounts ?? null,
   }
 }

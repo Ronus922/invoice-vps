@@ -24,7 +24,10 @@ export interface ParsedScan {
   passthrough: ScanPassthrough
   confidence: ScanConfidence
   vatDerived: boolean
-  /** The model's tool input exactly as received (stored in extraction_raw for audit). */
+  /** pretax / vat exactly as the model READ them, before the derivation filled them in. */
+  readAmounts: { pretax: number | null; vat: number | null }
+  /** The model's tool input exactly as received (diagnostics and tests; what is stored for audit is the form
+   *  snapshot the save step receives, see extraction_raw.parsed). */
   raw: Record<string, unknown>
 }
 
@@ -53,7 +56,8 @@ export function parseScanExtraction(input: unknown): ParsedScan | null {
     vat: num(o.vat),
     total,
     currency,
-    date: typeof o.date === 'string' ? o.date : null,
+    // the ISO form when the date is real: parseInvoiceDate reads DD.MM.YYYY as month/day, the ISO form never
+    date: toIsoDate(o.date) || (typeof o.date === 'string' ? o.date : null),
   })
 
   const fields: ScanValues = {
@@ -82,6 +86,7 @@ export function parseScanExtraction(input: unknown): ParsedScan | null {
     passthrough: { description: clean(o.description, 300), category: clean(o.category, 60) },
     confidence,
     vatDerived: derivation.vatDerived,
+    readAmounts: { pretax: num(o.pretax), vat: num(o.vat) },
     raw: o,
   }
 }

@@ -4,7 +4,7 @@ import { NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { ScanImageError, type CompressedImage } from '@/lib/scan/image'
 import type { DuplicateInfo } from '@/lib/scan/model'
 import { saveScannedReceipt, type SaveInput } from '@/lib/scan/save'
-import { findDuplicateIn, type InsertResult, type ScanStore } from '@/lib/scan/store'
+import { findDuplicateIn, isScanObjectPath, type InsertResult, type ScanStore } from '@/lib/scan/store'
 import { scanSaveSchema, type ScanSaveData } from '@/lib/scan/validation'
 
 // The invariant of the whole feature: a scanned receipt takes the SAME road into the SAME table as every
@@ -94,7 +94,7 @@ describe('a successful save enters the table as a scan', () => {
     expect(inserted).toHaveLength(1)
     expect(inserted[0]).toMatchObject({
       source: 'scan', scanned_by: ACTOR, created_by: ACTOR, image_bytes: 1234,
-      date: '09/11/2026', file_name: 'שופרסל_4455_2026-11-09.jpg', vendor_tax_id: '512345678',
+      date: '09/11/2026', file_name: 'שופרסל_4455_2026-11-09_receipt.jpg', vendor_tax_id: '512345678',
       file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/abc.jpg',
       doc_type: 'receipt', total: 45, needs_review: false, currency: 'ILS',
     })
@@ -135,6 +135,15 @@ describe('the row goes through the SAME normalisation as POST /api/invoices', ()
     const { store, inserted } = fakeStore()
     await run(store, data({ pretax: 50, vat: 3, total: 118 }))
     expect((inserted[0]!.extraction_raw as Record<string, unknown>).vat_derivation).toMatchObject({ original: { pretax: 50, vat: 3 } })
+  })
+  it('a pair the OCR derived (sent as null) is derived at the FINAL date and currency, with the audit record', async () => {
+    const { store, inserted } = fakeStore()
+    await run(store, data({ pretax: null, vat: null, total: 118, date: '2024-03-01', ocr_read: { pretax: 50, vat: 3 } }))
+    expect(inserted[0]).toMatchObject({ pretax: 100.85, vat: 17.15, vat_derived: true, needs_review: false }) // 17% before 2025
+    expect(inserted[0]!.extraction_raw).toMatchObject({ vat_derivation: { original: { pretax: 50, vat: 3 } } }) // what the model read, not what it was filled with
+    const usd = fakeStore()
+    await run(usd.store, data({ pretax: null, vat: null, total: 50, currency: 'USD' }))
+    expect(usd.inserted[0]).toMatchObject({ pretax: 50, vat: 0, vat_derived: true }) // a corrected foreign currency carries no Israeli VAT
   })
   it('a balanced pair is left exactly as typed', async () => {
     expect(await row({ pretax: 100, vat: 18, total: 118 })).toMatchObject({ pretax: 100, vat: 18, needs_review: false })
@@ -234,5 +243,18 @@ describe('findDuplicateIn — the identity lookup', () => {
   it('a lookup error is thrown, not read as "no duplicate"', async () => {
     const { db } = fakeDb([], { code: '57P01' })
     await expect(findDuplicateIn(db, { vendor: 'x', docNumber: '1', docType: 'receipt' })).rejects.toThrow('duplicate_lookup_failed')
+  })
+})
+
+describe('the image route only reads objects of the exact shape a scan stores', () => {
+  it('accepts invoices/<uuid>.jpg', () => {
+    expect(isScanObjectPath('invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg')).toBe(true)
+  })
+  it('refuses traversal, other folders, other extensions and other buckets (source is writable through /api/invoices)', () => {
+    for (const bad of [
+      null, '', 'invoices/../other-bucket/x.jpg', '../x/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg', 'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.pdf',
+      'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg?x=1', 'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg/../../y', 'other/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg',
+      'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf1.jpg', 'invoices/sub/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg',
+    ]) expect(isScanObjectPath(bad)).toBe(false)
   })
 })

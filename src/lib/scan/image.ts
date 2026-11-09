@@ -90,6 +90,12 @@ function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
   return run
 }
 
+/** The most pixels any decode may allocate. The browser sends a crop of at most 2000px on its long side, so a
+ *  legitimate upload is a few megapixels; the HEIC path is capped separately at 25MP. 50MP still admits a
+ *  48MP phone sensor sent whole (the rare no-crop fallback), and keeps a forged 120MP PNG/AVIF/WebP — a few
+ *  KB on the wire, ~480MB decoded — from reaching the decoder. */
+export const MAX_INPUT_PIXELS = 50_000_000
+
 // What a phone camera / a library photo can be. sharp would also open SVG, GIF and
 // TIFF — formats nobody photographs a receipt in, and SVG is a renderer surface.
 const ALLOWED_FORMATS = new Set(['jpeg', 'png', 'webp', 'heif', 'avif'])
@@ -101,7 +107,9 @@ async function guarded<T>(fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (err instanceof ScanImageError) throw err
     // sharp says "Input buffer contains unsupported image format" for a non-image.
-    const unsupported = err instanceof Error && /unsupported image format|Input buffer/i.test(err.message)
+    const message = err instanceof Error ? err.message : ''
+    if (/pixel limit/i.test(message)) throw new ScanImageError('too_large')
+    const unsupported = /unsupported image format|Input buffer/i.test(message)
     throw new ScanImageError(unsupported ? 'unsupported' : 'corrupt')
   }
 }
@@ -123,7 +131,7 @@ async function openSource(input: Buffer): Promise<Buffer> {
     }
   }
 
-  const format = await guarded(async () => (await sharp(source, { failOn: 'error' }).metadata()).format)
+  const format = await guarded(async () => (await sharp(source, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS }).metadata()).format)
   if (!format || !ALLOWED_FORMATS.has(format)) throw new ScanImageError('unsupported')
   return source
 }
@@ -135,13 +143,13 @@ async function openSource(input: Buffer): Promise<Buffer> {
  *  the grey scale; a good photo already spans it, so this does nothing to it). Nothing is carried over
  *  from the input's metadata: sharp writes none unless asked. */
 async function upright(source: Buffer, side: number): Promise<Sharp> {
-  const meta = await guarded(() => sharp(source, { failOn: 'error', limitInputPixels: 120_000_000 }).metadata())
+  const meta = await guarded(() => sharp(source, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS }).metadata())
   const swap = (meta.orientation ?? 1) >= 5 // EXIF 5–8 are the 90° turns: width and height trade places
   const w = (swap ? meta.height : meta.width) ?? 0
   const h = (swap ? meta.width : meta.height) ?? 0
   if (w <= 0 || h <= 0) throw new ScanImageError('corrupt')
   const target = scanTargetSize(w, h, side)
-  return sharp(source, { failOn: 'error', limitInputPixels: 120_000_000 })
+  return sharp(source, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS })
     .rotate()
     .resize({ width: target.w, height: target.h, fit: 'fill' })
     .flatten({ background: '#ffffff' })
@@ -271,12 +279,12 @@ async function acceptFinalJpeg(input: Buffer): Promise<CompressedImage | null> {
   try {
     // failOn 'warning': libjpeg reports junk between scans or before the final EOI as a warning, and a photo
     // that is "final" has none.
-    const meta = await sharp(input, { failOn: 'warning', limitInputPixels: 120_000_000 }).metadata()
+    const meta = await sharp(input, { failOn: 'warning', limitInputPixels: MAX_INPUT_PIXELS }).metadata()
     const w = meta.width ?? 0
     const h = meta.height ?? 0
     if (meta.format !== 'jpeg' || w === 0 || h === 0) return null
     if (Math.max(w, h) > SCAN_IMAGE_MAX_SIDE * MAX_LONG_FACTOR) return null
-    await sharp(input, { failOn: 'warning', limitInputPixels: 120_000_000 }).stats() // forces a full decode
+    await sharp(input, { failOn: 'warning', limitInputPixels: MAX_INPUT_PIXELS }).stats() // forces a full decode
     return asCompressed(input, w, h, null)
   } catch {
     return null

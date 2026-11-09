@@ -95,7 +95,9 @@ export interface OcrResponse {
   passthrough: ScanPassthrough;
   confidence: ScanConfidence;
   /** True when pretax/vat were computed from the total (deriveVatFromTotal), not read. */
-  vat_derived: boolean;
+  vat_derived: boolean
+  /** pretax / vat as the model read them (null = not read), before any derivation. */
+  read_amounts: { pretax: number | null; vat: number | null };
   /** The compressed photo (JPEG, no metadata) as base64 — the very bytes the save step stores
    *  (it posts them back and the server keeps them as they are), so the preview matches. */
   image_base64: string;

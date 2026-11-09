@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cleanNamePart, contentDisposition, encodeRfc5987, receiptFileName } from '@/lib/scan/downloadName'
+import { cleanNamePart, contentDisposition, encodeRfc5987, receiptFileName, receiptStoredName } from '@/lib/scan/downloadName'
 
 describe('receiptFileName: {vendor}_{doc_number}_{doc_date}.jpg', () => {
   it('joins the three parts', () => {
@@ -44,5 +44,22 @@ describe('Content-Disposition (RFC 5987)', () => {
   it('falls back to receipt.jpg when nothing ASCII survives', () => {
     expect(contentDisposition('inline', 'שופרסל.jpg')).toContain('filename="receipt.jpg"')
     expect(contentDisposition('inline', 'x.jpg').startsWith('inline;')).toBe(true)
+  })
+})
+
+describe('receiptStoredName: the name the accountant e-mail, the Drive backup and the ZIP export key on', () => {
+  const base = { vendor: 'שופרסל', docNumber: '4455', docDate: '2026-11-09' }
+  it('adds the document type, so a tax invoice and a receipt with the same number and date never collide', () => {
+    expect(receiptStoredName({ ...base, docType: 'receipt' })).toBe('שופרסל_4455_2026-11-09_receipt.jpg')
+    expect(receiptStoredName({ ...base, docType: 'invoice' })).toBe('שופרסל_4455_2026-11-09_invoice.jpg')
+    expect(receiptStoredName({ ...base, docType: 'receipt' })).not.toBe(receiptStoredName({ ...base, docType: 'invoice' }))
+  })
+  it('leaves an unknown type out, like the exporters\' own fallback name, and never trusts a free-text type', () => {
+    expect(receiptStoredName({ ...base, docType: 'unknown' })).toBe('שופרסל_4455_2026-11-09.jpg')
+    expect(receiptStoredName({ ...base, docType: null })).toBe('שופרסל_4455_2026-11-09.jpg')
+    expect(receiptStoredName({ ...base, docType: '../../x' })).toBe('שופרסל_4455_2026-11-09.jpg')
+  })
+  it('the download button keeps the plain {vendor}_{doc_number}_{doc_date}.jpg', () => {
+    expect(receiptFileName(base)).toBe('שופרסל_4455_2026-11-09.jpg')
   })
 })

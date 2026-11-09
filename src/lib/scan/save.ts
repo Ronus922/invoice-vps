@@ -5,7 +5,7 @@ import { finalizeInvoicePayload } from '@/lib/invoice-write'
 import { normalizeDocType } from '@/lib/doc-type'
 import { fromStoredDate, toStoredDate } from './format'
 import { compressReceiptImage, ScanImageError, type CompressedImage } from './image'
-import { receiptFileName } from './downloadName'
+import { receiptStoredName } from './downloadName'
 import type { DuplicateInfo } from './model'
 import type { ScanStore } from './store'
 import type { ScanSaveData } from './validation'
@@ -84,14 +84,15 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
     category: data.category || null,
     source: 'scan',
     file_url: stored.fileUrl,
-    file_name: receiptFileName({ vendor: data.vendor, docNumber: data.doc_number, docDate: fromStoredDate(storedDate) }),
+    file_name: receiptStoredName({ vendor: data.vendor, docNumber: data.doc_number, docDate: fromStoredDate(storedDate), docType }),
     image_bytes: img.bytes.length,
     scanned_by: actorId,
     created_by: actorId,
     needs_review: false,
     validation_error: null,
   }
-  const original = { pretax: data.pretax, vat: data.vat }
+  // What the model read, when the form still carries its derivation; otherwise what Ronen typed.
+  const original = data.ocr_read ?? { pretax: data.pretax, vat: data.vat }
   finalizeInvoicePayload(payload)
 
   const validation = validateInvoiceArithmetic({

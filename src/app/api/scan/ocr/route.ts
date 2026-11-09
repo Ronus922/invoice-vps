@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     passthrough: ocr.parsed?.passthrough ?? { description: '', category: '' },
     confidence: ocr.parsed?.confidence ?? {},
     vat_derived: ocr.parsed?.vatDerived ?? false,
+    read_amounts: ocr.parsed?.readAmounts ?? { pretax: null, vat: null },
     image_base64: img.bytes.toString('base64'),
     image_type: img.contentType,
     image_bytes: img.bytes.length,

@@ -144,6 +144,14 @@ describe('compressReceiptImage — the stored form', () => {
     await expect(compressReceiptImage(good.subarray(0, 600))).rejects.toBeInstanceOf(ScanImageError)
   })
 
+  it('refuses a forged huge picture (a few KB on the wire, hundreds of MB decoded) as too_large, before decoding it', async () => {
+    const huge = await sharp({ create: { width: 9000, height: 7000, channels: 3, background: '#ffffff' } }).png({ compressionLevel: 9 }).toBuffer() // 63MP
+    expect(huge.length).toBeLessThan(200 * 1024)
+    await expect(compressReceiptImage(huge)).rejects.toMatchObject({ code: 'too_large' })
+    const ok = await sharp({ create: { width: 7000, height: 6000, channels: 3, background: '#eeeeee' } }).jpeg().toBuffer() // 42MP: a phone sensor sent whole
+    expect((await compressReceiptImage(ok)).width).toBeGreaterThan(0)
+  })
+
   it('refuses SVG and GIF even though sharp can open them', async () => {
     const gif = await sharp({ create: { width: 10, height: 10, channels: 3, background: '#fff' } }).gif().toBuffer()
     await expect(compressReceiptImage(gif)).rejects.toMatchObject({ code: 'unsupported' })

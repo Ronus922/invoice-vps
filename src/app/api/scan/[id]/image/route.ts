@@ -15,8 +15,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // GET /api/scan/[id]/image[?download=1] — the stored photo of a SCANNED receipt, streamed by the server.
 // Session + allowlist; the bytes come from the private bucket through the service role and go straight
 // to the browser — the client never receives a signed or public storage URL. Only rows with
-// source = 'scan' are served (every other document keeps using /api/file), so this route cannot be turned
-// into a general file proxy. `?download=1` answers `Content-Disposition: attachment` with the name
+// source = 'scan' whose file_url is an object of the exact shape a scan stores (invoices/<uuid>.jpg,
+// see isScanObjectPath) are served; every other document keeps using /api/file. The path-shape check is
+// what holds the line: `source` is writable through POST/PATCH /api/invoices. `?download=1` answers `Content-Disposition: attachment` with the name
 // {vendor}_{doc_number}_{doc_date}.jpg (Hebrew per RFC 5987, `' ( ) *` encoded too).
 export async function GET(req: NextRequest, ctx: RouteCtx) {
   const user = await getAuthenticatedUser()

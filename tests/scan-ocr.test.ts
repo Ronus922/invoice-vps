@@ -80,6 +80,7 @@ describe('readReceipt', () => {
       pretax: '100.00', vat: '18.00', total: '118.00', currency: 'ILS', payment_method: 'אשראי',
     })
     expect(parsed!.vatDerived).toBe(true) // pretax and vat were not read: derived from the total at the 2026 rate
+    expect(parsed!.readAmounts).toEqual({ pretax: null, vat: null }) // what the model READ, kept apart from what was filled in
     expect(parsed!.confidence).toEqual({ vendor: 0.95, doc_number: 0.4, total: 0.99, date: 0.9 }) // "bogus" is not a field
     expect(parsed!.passthrough).toEqual({ description: 'מצרכים', category: 'אחר' })
   })
@@ -106,6 +107,15 @@ describe('parseScanExtraction', () => {
   it('keeps a balanced pair as read and does not mark it derived', () => {
     const p = parseScanExtraction({ date: '01/03/2026', vendor: 'A', total: 118, pretax: 100, vat: 18, currency: 'ILS', doc_type: 'invoice' })!
     expect([p.fields.pretax, p.fields.vat, p.vatDerived]).toEqual(['100.00', '18.00', false])
+  })
+  it('derives with the real date even when the receipt prints DD.MM.YYYY (Date() would read it as month/day)', () => {
+    const p = parseScanExtraction({ date: '15.03.2024', vendor: 'A', total: 117, currency: 'ILS', doc_type: 'invoice' })!
+    expect([p.fields.date, p.fields.pretax, p.fields.vat]).toEqual(['2024-03-15', '100.00', '17.00']) // the 17% era
+  })
+  it('keeps the amounts the model read apart from the derived ones', () => {
+    const p = parseScanExtraction({ date: '01/03/2026', vendor: 'A', total: 118, pretax: 50, vat: 3, currency: 'ILS', doc_type: 'invoice' })!
+    expect(p.readAmounts).toEqual({ pretax: 50, vat: 3 })
+    expect([p.fields.pretax, p.fields.vat, p.vatDerived]).toEqual(['100.00', '18.00', true]) // unbalanced: the total wins (Ronen's policy)
   })
   it('a negative total (credit note) derives a negative VAT, like the manual path', () => {
     const p = parseScanExtraction({ date: '01/03/2026', vendor: 'A', total: -118, currency: 'ILS', doc_type: 'credit_note' })!
