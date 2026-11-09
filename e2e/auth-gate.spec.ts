@@ -29,11 +29,6 @@ test.describe('שער אימות', () => {
     await expect(page).toHaveURL(/\/login/)
   })
 
-  test('מסך הסריקה /scan מפנה משתמש לא מאומת ל-/login', async ({ page }) => {
-    await page.goto('/scan')
-    await expect(page).toHaveURL(/\/login/)
-  })
-
   for (const route of ['/api/scan/ocr', '/api/scan/save']) {
     test(`POST ${route} ללא session מחזיר 401 ולא מעבד תמונה`, async ({ request }) => {
       const res = await request.post(route, { multipart: { image: { name: 'x.jpg', mimeType: 'image/jpeg', buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]) } } })

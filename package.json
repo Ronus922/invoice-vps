@@ -11,6 +11,7 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:scan-flow": "node e2e/scan-flow/run.mjs",
     "check:secrets": "node scripts/check-no-secrets.mjs",
     "check:auth": "node scripts/check-api-auth.mjs",
     "check:source": "node scripts/check-source-enum.mjs",
