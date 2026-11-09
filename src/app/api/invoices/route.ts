@@ -6,7 +6,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
-import { coerceRequiredIdentityFields } from '@/lib/invoice-write'
+import { finalizeInvoicePayload } from '@/lib/invoice-write'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -48,7 +48,7 @@ const InvoiceWriteSchema = z.object({
   currency: z.string().nullable().optional(),
   payment_method: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
-  source: z.enum(['manual', 'gmail', 'whatsapp', 'folder']).optional(),
+  source: z.enum(['manual', 'gmail', 'whatsapp', 'folder', 'scan']).optional(),
   file_url: z.string().nullable().optional(),
   file_name: z.string().nullable().optional(),
   needs_review: z.boolean().optional(),
@@ -135,32 +135,9 @@ export async function POST(request: NextRequest) {
   }
   const payload: Record<string, unknown> = { ...parsed.data, created_by: user.id }
 
-  // Always store a canonical doc_type (the DB CHECK rejects anything else).
-  payload.doc_type = normalizeDocType(payload.doc_type)
-
-  // A positively-identified non-invoice (proforma / quote / delivery note)
-  // must never reach the accountant automatically — force review.
-  if (isNonInvoiceDocType(payload.doc_type)) {
-    payload.needs_review = true
-    payload.validation_error = NON_INVOICE_REVIEW_MESSAGE
-  }
-
-  coerceRequiredIdentityFields(payload)
-
-  // VAT fallback: when extraction left pretax/vat empty (or unbalanced) but the
-  // total is valid, derive them from the total instead of flagging the invoice.
-  const derivation = deriveVatFromTotal({
-    pretax: (payload.pretax as number | null | undefined) ?? null,
-    vat: (payload.vat as number | null | undefined) ?? null,
-    total: (payload.total as number | null | undefined) ?? null,
-    currency: (payload.currency as string | null | undefined) ?? null,
-    date: (payload.date as string | null | undefined) ?? null,
-  })
-  if (derivation.vatDerived) {
-    payload.pretax = derivation.pretax
-    payload.vat = derivation.vat
-    payload.vat_derived = true
-  }
+  // doc_type canonicalisation, non-invoice gate, identity coercion and the VAT fallback —
+  // one shared step (src/lib/invoice-write.ts) so the receipt scan takes the same road.
+  finalizeInvoicePayload(payload)
 
   const vendor = String(payload.vendor || '').trim()
   const category = String(payload.category || '').trim()

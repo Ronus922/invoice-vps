@@ -178,3 +178,42 @@ export const EXTRACTION_TOOL = {
     required: ['date', 'vendor', 'total', 'currency', 'doc_type'],
   },
 }
+
+// ── Receipt scan (a paper receipt photographed on the phone) ───────────────────
+// The SAME extraction call, prompt and model as above — the scan route only ADDS to the
+// tool's schema (the issuer's tax id and a 0–1 confidence per field, both optional, so a
+// reply without them is still valid) and appends one paragraph to the prompt. The Gmail
+// and manual-upload paths keep using EXTRACTION_TOOL / INVOICE_EXTRACTION_PROMPT untouched.
+export const SCAN_CONFIDENCE_FIELDS = [
+  'doc_type', 'vendor', 'vendor_tax_id', 'doc_number', 'date', 'pretax', 'vat', 'total', 'currency', 'payment_method',
+] as const
+
+export const SCAN_EXTRACTION_PROMPT_ADDENDUM = `
+
+## PHOTOGRAPHED PAPER RECEIPT
+This image is a PHONE PHOTO of a paper receipt or invoice (it may be a long, narrow supermarket
+receipt, crumpled, tilted, or a faded thermal print). Read it exactly as above.
+- "vendor_tax_id": the ISSUER's company / dealer number (ח.פ / ע.מ / עוסק מורשה / VAT ID), digits only.
+  Return "" when it is not printed. It is NOT the customer's number and NOT a phone number.
+- "confidence": an object with a number from 0 to 1 for EACH of these keys:
+  doc_type, vendor, vendor_tax_id, doc_number, date, pretax, vat, total, currency, payment_method.
+  1 = every character is clearly legible; below 0.7 = you are unsure of at least one character.
+  Faded, blurred, cut-off or guessed values get a LOW number — never inflate it.
+- Never guess a digit. When a field cannot be read, leave it empty (or null for amounts) and give it a low confidence.`
+
+const SCAN_CONFIDENCE_SCHEMA = {
+  type: 'object' as const,
+  properties: Object.fromEntries(SCAN_CONFIDENCE_FIELDS.map((k) => [k, { type: 'number' }])),
+}
+
+export const SCAN_EXTRACTION_TOOL = {
+  ...EXTRACTION_TOOL,
+  input_schema: {
+    ...EXTRACTION_TOOL.input_schema,
+    properties: {
+      ...EXTRACTION_TOOL.input_schema.properties,
+      vendor_tax_id: { type: 'string' },
+      confidence: SCAN_CONFIDENCE_SCHEMA,
+    },
+  },
+}

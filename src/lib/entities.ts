@@ -13,7 +13,7 @@ export interface Invoice {
   currency: string
   payment_method: string | null
   category: string | null
-  source: 'manual' | 'gmail' | 'whatsapp' | 'folder'
+  source: 'manual' | 'gmail' | 'whatsapp' | 'folder' | 'scan'
   file_url: string | null
   file_name: string | null
   created_at: string
@@ -26,6 +26,10 @@ export interface Invoice {
   extraction_raw: ExtractionRaw | null
   sent_to_accountant_at: string | null
   accountant_send_error: string | null
+  // Receipt scan only (source = 'scan'); NULL for every other source.
+  scanned_by?: string | null
+  image_bytes?: number | null
+  vendor_tax_id?: string | null
 }
 
 export interface ExtractionRaw {
@@ -34,7 +38,7 @@ export interface ExtractionRaw {
   parsed: unknown
   validation_error: string | null
   scanned_at: string
-  source: 'manual' | 'gmail' | 'whatsapp' | 'folder'
+  source: 'manual' | 'gmail' | 'whatsapp' | 'folder' | 'scan'
 }
 
 async function readError(res: Response, fallback: string): Promise<string> {

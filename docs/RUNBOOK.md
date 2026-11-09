@@ -139,6 +139,21 @@
   שלה, ו-build שם מחליף את מה שרץ. בדיקת build של ענף: `git worktree add` לתיקייה
   זמנית, ובונים שם.
 
+## סריקת קבלה (נוסף 9/11/2026)
+
+תיעוד מלא: `docs/receipt-scan.md`. הפיצ'ר מוסיף את המסך `/scan` ואת `/api/scan/*`.
+
+- **סדר פריסה: המיגרציה קודם, ואז הקוד.** `supabase/migrations/20261109_add_receipt_scan.sql` מרחיבה את ה-CHECK של `source` ומוסיפה
+  שלוש עמודות nullable. היא מיושמת ידנית כבעל הטבלה, בלי `invoice_app`:
+  `docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/20261109_add_receipt_scan.sql`.
+  בלי המיגרציה כל שמירת סריקה נכשלת (ה-CHECK דוחה `'scan'`), בעוד שכל שאר המערכת ממשיכה לעבוד. החזרה: ב-`receipt-scan.md` ובראש קובץ המיגרציה.
+- **תלויות חדשות:** `sharp` (ישיר; היה כבר במעקב דרך `next`), `heic-convert` (WASM, בלי build נייטיבי). אחרי `deploy.sh` ה-build הוא standalone, ובדיקה אחת שווה לעשות:
+  ש-`.next/standalone/node_modules/sharp` קיים.
+- **בדיקת עשן אחרי פריסה (ידנית, אין משתמש בדיקה):** באייפון, `https://invoice.bios.co.il/scan` ← "צלם קבלה" ← חיתוך ← בדיקת הנתונים ← "אשר ושמור". צפוי: מופיעה שורה עם התג "סריקה", וקבלה תקינה נשלחת לרו"ח.
+  כל סריקה אמיתית היא קריאת vision בתשלום, ושמירה אמיתית שולחת מייל אמיתי לרו"ח — לא מריצים אותה "לבדיקה" בלי אישור.
+- **בדיקות יחידה:** `pnpm test` (vitest). ה-job `unit` ב-CI אמיתי וכשל אצלו נחשב, אבל הוא עדיין לא ב-required של ה-ruleset (שינוי הגדרות של הריפו — החלטה של רונן).
+  `vite` מוצמד ל-`^7` (ראו "שדרוגים שנדחו בכוונה").
+
 ## Node
 
 - **גרסה:** Node 24 LTS ("Krypton"), מוצמד ל-`v24.22.2` (נכון ל-1/11/2026). `engines.node` ב-`package.json`
@@ -240,13 +255,14 @@
 
 ## שדרוגים שנדחו בכוונה
 
-שתי הצעות של Renovate נבדקו ולא מוזגו. לכל אחת יש הגבלה ב-`.github/renovate.json` (`allowedVersions`, עם
+שלוש הצעות של Renovate נבדקו ולא מוזגו. לכל אחת יש הגבלה ב-`.github/renovate.json` (`allowedVersions`, עם
 `description` שמפנה לכאן), כדי שלא ייפתח PR חדש עד שתנאי החזרה מתקיימים. כשהתנאי מתקיים מסירים את הכלל.
 
 | חבילה | רצה | נדחה | סיבה | תנאי חזרה |
 |---|---|---|---|---|
 | `typescript` | 6.0.3 | 7.0.2 | `pnpm lint` נשבר בטעינה: `typescript-eslint` 8.72.x תומך ב-TS `<6.1.0`, ו-`eslint-config-next` זורק "does not support TS 7.0". `pnpm build` מריץ `lint` ראשון, ולכן גם הפריסה הייתה נשברת. `tsc --noEmit` ו-typecheck של `next build` עובדים. | `typescript-eslint` מוציא תמיכה ב-TS 7 (issue typescript-eslint#10940) ו-`eslint-config-next` מאמץ אותו. נבדק אחת לרבעון (נוהל התחזוקה, שורה 5). אז מסירים את התקרה ו-Renovate פותח PR רגיל. |
 | `pnpm` | 10.34.9 | 11 ו-12.16.1 | pnpm 12 הוא מעבר שרשרת כלים ולא עדכון גרסה: השדה `pnpm` ב-`package.json` כבר לא נקרא (`overrides` ו-`auditConfig` עוברים ל-`pnpm-workspace.yaml`), `strictDepBuilds` דורש `allowBuilds` עבור `@sentry/cli`, ה-lockfile חייב להיווצר מחדש (נחסם כרגע על ידי `minimumReleaseAge` של יום), `pnpm run` בלי `node_modules` מתקין קודם (משנה את ה-job `checks`, שכתוב עליו שהוא רץ בלי התקנה), ותמיכת `pnpm/action-setup` v6.0.x ב-pin של v12 לא אומתה. הקו 10.34 עדיין מקבל תיקונים. | PR מעבר ייעודי: `pnpm-workspace.yaml`, `allowBuilds`, lockfile מחדש, אימות שה-job `checks` נשאר בלי התקנה ושהפריסה עובדת עם ה-shim של corepack, ו-`pnpm/action-setup` בגרסה 6.1.0 ומעלה. |
+| `vite` | 7.3.7 | 8.x | `vitest` (בדיקות היחידה של סריקת הקבלה) מושך את vite 8, ששרשרת ה-bundler שלו (`rolldown` 1.2.18 ומעלה) נטענת עם `SIGILL` על המעבד של השרת (Xeon E5-2667 v2, בלי AVX2): `vitest run` קורס לפני הבדיקה הראשונה, ו-`node -e "require('rolldown')"` מחזיר exit 132. `rolldown` 1.2.15 (ש-Billing מריץ) נטען. ב-vite 7 (esbuild ו-rollup) הכול עובד. ב-CI (runner של GitHub, יש AVX2) vite 8 היה ירוק, ולכן התקרה חיונית: בלעדיה PR כזה היה עובר ושובר את הבדיקות המקומיות. | `node -e "require('rolldown')"` נטען על השרת עם ה-rolldown ש-vite 8 דורש (המעבד הוחלף, או ש-rolldown שוב נבנה בלי AVX2). אז מסירים את התקרה. |
 
 נבדקו ואושרו עם הערה, לא נדחו (1/11/2026 ו-2/11/2026):
 

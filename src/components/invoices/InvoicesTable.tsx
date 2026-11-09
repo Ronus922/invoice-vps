@@ -302,6 +302,11 @@ export default function InvoicesTable({
                           וואטסאפ
                         </span>
                       )}
+                      {inv.source === 'scan' && (
+                        <span className="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-full">
+                          סריקה
+                        </span>
+                      )}
                       {(() => {
                         const status = accountantStatusLabel(inv)
                         const isRetrying = retryingIds.has(inv.id)
@@ -476,6 +481,13 @@ export default function InvoicesTable({
                           style={{ background: 'rgba(74, 222, 128, 0.12)', color: 'rgb(134, 239, 172)' }}
                         >
                           וואטסאפ
+                        </span>
+                      ) : inv.source === 'scan' ? (
+                        <span
+                          className="inline-flex items-center rounded-full px-2.5 py-[3px] text-[11.5px]"
+                          style={{ background: 'rgba(245, 158, 11, 0.14)', color: 'rgb(252, 211, 77)' }}
+                        >
+                          סריקה
                         </span>
                       ) : (
                         <span
