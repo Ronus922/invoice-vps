@@ -92,7 +92,7 @@ describe('loadEnv — only three keys leave the env file', () => {
   }
 
   it('returns the three keys it needs and nothing else (quotes stripped)', async () => {
-    const f = await write(['ANTHROPIC_API_KEY=sk-ant-NEVER', 'NEXT_PUBLIC_SUPABASE_URL="https://s.example"', 'SUPABASE_SERVICE_ROLE_KEY=svc', "DIRECT_URL='postgres://u@h/d'", 'CRON_SECRET=also-never'].join('\n'))
+    const f = await write(['ANTHROPIC_API_KEY=NEVER-read-this-placeholder', 'NEXT_PUBLIC_SUPABASE_URL="https://s.example"', 'SUPABASE_SERVICE_ROLE_KEY=svc', "DIRECT_URL='postgres://u@h/d'", 'CRON_SECRET=also-never'].join('\n'))
     const env = await loadEnv(f, {})
     expect(env).toEqual({ supabaseUrl: 'https://s.example', serviceKey: 'svc', dbUrl: 'postgres://u@h/d' })
     expect(JSON.stringify(env)).not.toMatch(/NEVER/)
