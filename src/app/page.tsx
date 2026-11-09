@@ -12,7 +12,6 @@ import {
   Settings,
   Plus,
   Menu,
-  ScanLine,
   X,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
@@ -150,7 +149,6 @@ export default function InvoicesPage() {
   const navItems = [
     { label: 'לוח בקרה', icon: LayoutGrid, active: true, onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) },
     { label: 'חשבוניות', icon: FileText, onClick: scrollToTable },
-    { label: 'סרוק קבלה', icon: ScanLine, onClick: () => router.push('/scan') },
     { label: 'סריקת מייל', icon: Mail, onClick: () => setShowScanModal(true) },
     { label: 'סריקת תיקייה', icon: FolderCog, onClick: () => setShowFolderWatch(true) },
     { label: 'קטגוריות', icon: Tag, onClick: () => setShowCategoryManager(true) },
@@ -296,14 +294,6 @@ export default function InvoicesPage() {
             >
               <Plus className="h-4 w-4" />
               <span>העלאת חשבוניות</span>
-            </button>
-            <button
-              onClick={() => router.push('/scan')}
-              className="flex h-[42px] items-center gap-2 rounded-[11px] px-4 text-sm font-medium"
-              style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text2)' }}
-            >
-              <ScanLine className="h-4 w-4" />
-              <span>סרוק קבלה</span>
             </button>
             <button
               onClick={() => setShowScanModal(true)}

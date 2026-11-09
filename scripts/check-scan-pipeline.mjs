@@ -9,15 +9,18 @@
 //   4. nothing under the scan routes / screen writes to `invoices` directly — the only insert lives in
 //      src/lib/scan/store.ts, reached through saveScannedReceipt;
 //   5. POST /api/invoices still uses the shared finalize step (so the two cannot drift apart);
-//   6. the image route serves only rows with source = 'scan' (it must not become a generic file proxy).
+//   6. the image route serves only rows with source = 'scan' (it must not become a generic file proxy);
+//   7. the scan UI is ONLY the upload zone on the home page: no /scan page, no link or router.push to it,
+//      and the zone splits PDFs (the old queue) from photos (the scan overlay).
 // The behaviour behind each of these is proved with fakes in tests/scan-save.test.ts (pnpm test);
 // this check is the cheap guard that runs in CI without node_modules.
 import { run, repoRoot, fail, ok } from './_lib.mjs'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 function walk(dir) {
   const out = []
+  if (!existsSync(dir)) return out
   for (const name of readdirSync(dir)) {
     const p = join(dir, name)
     if (statSync(p).isDirectory()) out.push(...walk(p))
@@ -48,7 +51,7 @@ run('check-scan-pipeline', async () => {
 
   // 4 — a single writer
   const writers = []
-  for (const dir of ['src/app/api/scan', 'src/components/scan', 'src/lib/scan', 'src/app/scan']) {
+  for (const dir of ['src/app/api/scan', 'src/components/scan', 'src/lib/scan']) {
     for (const file of walk(join(root, dir))) {
       const text = readFileSync(file, 'utf8')
       if (/\.from\(\s*['"]invoices['"]\s*\)\s*\.(insert|upsert)\(/.test(text.replace(/\s+/g, ' ').replace(/\) \./g, ').'))) writers.push(relative(root, file))
@@ -66,6 +69,19 @@ run('check-scan-pipeline', async () => {
   // 6 — the image route is scoped to scanned rows
   const store2 = read('src/lib/scan/store.ts')
   need(/\.eq\(\s*['"]source['"]\s*,\s*['"]scan['"]\s*\)/.test(store2), "getScanRow מסנן source = 'scan'", "getScanRow חייב לסנן .eq('source', 'scan') — אחרת ה-route הופך ל-proxy כללי לקבצים")
+
+  // 7 — one entry point: the upload zone on the home page
+  need(!existsSync(join(root, 'src/app/scan')), 'אין עמוד /scan נפרד', 'src/app/scan חייב לא להתקיים — ה-UI היחיד לסריקה הוא אזור ההעלאה בדף הבית')
+  const stray = []
+  for (const file of walk(join(root, 'src'))) {
+    if (file.startsWith(join(root, 'src/app/api'))) continue
+    if (/(?:push|replace|prefetch)\(\s*['"`]\/scan\b|href=\{?\s*['"`]\/scan\b|redirect\(\s*['"`]\/scan\b/.test(readFileSync(file, 'utf8'))) stray.push(relative(root, file))
+  }
+  need(stray.length === 0, 'אין ניווט ל-/scan', 'ניווט ל-/scan (מסך שאינו קיים): ' + stray.join(', '))
+  const zone = read('src/components/invoices/UploadZone.tsx')
+  need(/\bsplitUploads\(/.test(zone) && /<ScanOverlay\b/.test(zone), 'UploadZone מפצל PDF / תמונה ופותח את ה-overlay של הסריקה',
+    'UploadZone חייב לפצל קבצים (splitUploads) ולפתוח את ScanOverlay לתמונות — אחרת תמונה חוזרת לצינור הישיר בלי חיתוך')
+  need(/accept="application\/pdf,image\/\*"/.test(zone), 'ה-input של אזור ההעלאה מקבל PDF ותמונות', 'ה-input של אזור ההעלאה חייב להיות accept="application/pdf,image/*"')
 
   if (bad === 0) ok('סריקה נכנסת לאותו צינור, עם בדיקת הכפילות')
 })

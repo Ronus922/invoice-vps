@@ -18,6 +18,8 @@ import {
   rememberVendorCategory,
 } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
+import { splitUploads } from '@/lib/scan/files'
+import ScanOverlay from '@/components/scan/ScanOverlay'
 
 interface QueueItem {
   file: File
@@ -37,6 +39,8 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
   const [isRunning, setIsRunning] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  // Photos picked here are scanned in an overlay on this same page (crop → read → review → save).
+  const [scanFiles, setScanFiles] = useState<File[] | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
@@ -209,10 +213,10 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
   )
 
   const addFilesToQueue = useCallback(
-    (files: FileList) => {
-      const valid = Array.from(files).filter(
-        (f) => f.type.includes('pdf') || f.name.endsWith('.pdf') || f.type.startsWith('image/')
-      )
+    (files: readonly File[]) => {
+      // PDFs keep the path they always had; photos go to the scan flow (crop → read → review → save).
+      const { pdfs: valid, photos } = splitUploads(files)
+      if (photos.length > 0) setScanFiles(photos)
       if (valid.length === 0) return
 
       const newEntries: QueueItem[] = valid.map((file) => {
@@ -233,14 +237,15 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
   )
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length) addFilesToQueue(e.target.files)
+    const picked = e.target.files ? Array.from(e.target.files) : []
+    if (picked.length) addFilesToQueue(picked)
     e.target.value = ''
   }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    addFilesToQueue(e.dataTransfer.files)
+    addFilesToQueue(Array.from(e.dataTransfer.files))
   }
 
   const removeFromQueue = (idx: number) => setQueue((prev) => prev.filter((_, i) => i !== idx))
@@ -273,7 +278,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
         id="invoice-upload-input"
         ref={fileInputRef}
         type="file"
-        accept=".pdf,image/*"
+        accept="application/pdf,image/*"
         multiple
         className="sr-only"
         onChange={handleFileSelect}
@@ -321,13 +326,17 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
               ? 'מעבד חשבוניות...'
               : isMobile
                 ? 'לחץ לצילום או בחירת קובץ'
-                : 'גרור קבצי PDF לכאן או לחץ לבחירה'}
+                : 'גרור קבצי PDF או תמונות לכאן או לחץ לבחירה'}
           </span>
           <span className="text-[13px]" style={{ color: 'var(--muted-mid)' }}>
             ניתן לבחור מספר קבצים בו־זמנית — הנתונים מחולצים ע&quot;י AI
           </span>
         </div>
       </div>
+
+      {scanFiles && (
+        <ScanOverlay files={scanFiles} onSaved={onInvoiceExtracted} onClose={() => setScanFiles(null)} />
+      )}
 
       {/* Queue */}
       {queue.length > 0 && (
