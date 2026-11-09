@@ -2,9 +2,10 @@ import { createClient } from '@supabase/supabase-js'
 import { TransientAwareError, isTransientStatus, withRetry, type RetryPolicy } from './retry'
 import type { ReadStore, StoredObject, WriteStore } from './run'
 
-// The two Storage adapters. They are separate on purpose: a dry run builds ONLY the read store, so there is no
+// The Storage adapters. They are separate on purpose: a dry run builds ONLY the read store, so there is no
 // object in the process that could upload or remove anything — "a dry run writes nothing" is structural, not a
-// promise. Neither adapter ever calls `remove`: this feature replaces bytes in place, it never deletes an object.
+// promise. The read and write stores never call `remove`: compression replaces bytes in place. Deleting is a
+// different tool (scripts/delete-orphans.ts) with its own RemoveStore, which only that script ever builds.
 //
 // Every call goes through withRetry (src/lib/compress/retry.ts): 5 tries, waits of 4s…30s. A failure that carries an
 // HTTP status other than 408/425/429/5xx is permanent (wrong key, no such bucket) and is NOT retried.
@@ -21,12 +22,14 @@ interface Failure {
 interface ListEntry {
   name: string
   id: string | null
+  created_at?: string | null
   metadata: Record<string, unknown> | null
 }
 export interface BucketLike {
   list(prefix: string, opts: { limit: number; offset: number; sortBy: { column: string; order: string } }): Promise<{ data: ListEntry[] | null; error: Failure | null }>
   download(path: string): Promise<{ data: Blob | null; error: Failure | null }>
   upload(path: string, body: Buffer, opts: { upsert: boolean; contentType: string; cacheControl: string }): Promise<{ error: Failure | null }>
+  remove(paths: string[]): Promise<{ error: Failure | null }>
 }
 
 export interface StoreDeps {
@@ -69,7 +72,7 @@ export function createReadStore(url: string, key: string, deps: StoreDeps = {}):
           await listPrefix(full, out) // a folder
         } else {
           const meta = e.metadata
-          out.push({ path: full, size: int(meta.size), mime: str(meta.mimetype), cacheControl: str(meta.cacheControl) })
+          out.push({ path: full, size: int(meta.size), mime: str(meta.mimetype), cacheControl: str(meta.cacheControl), createdAt: str(e.created_at) })
         }
       }
       if (data.length < PAGE) break
@@ -101,6 +104,22 @@ export function createWriteStore(url: string, key: string, deps: StoreDeps = {})
       withRetry(async () => {
         const { error } = await bucket.upload(path, bytes, { upsert: true, contentType: opts.contentType, cacheControl: seconds(opts.cacheControl) })
         if (error) throw storageFailure('upload', error)
+      }, deps.retry),
+  }
+}
+
+/** Built only by scripts/delete-orphans.ts. Removing a path that is already gone is a no-op, so a retry is harmless. */
+export interface RemoveStore {
+  remove(paths: string[]): Promise<void>
+}
+
+export function createRemoveStore(url: string, key: string, deps: StoreDeps = {}): RemoveStore {
+  const bucket = deps.bucket ?? bucketOf(url, key)
+  return {
+    remove: (paths) =>
+      withRetry(async () => {
+        const { error } = await bucket.remove(paths)
+        if (error) throw storageFailure('remove', error)
       }, deps.retry),
   }
 }

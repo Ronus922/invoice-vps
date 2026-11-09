@@ -25,6 +25,8 @@ export interface StoredObject {
   size: number
   mime: string | null
   cacheControl: string | null
+  /** When the bucket created the object (ISO). Only the orphan sweep reads it: an upload in progress looks like an orphan. */
+  createdAt?: string | null
 }
 
 export interface ReadStore {

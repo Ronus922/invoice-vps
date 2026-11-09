@@ -78,6 +78,7 @@ function fakeBucket(over: Partial<BucketLike> = {}): BucketLike {
     list: async () => ({ data: [], error: null }),
     download: async () => ({ data: new Blob([new Uint8Array([1, 2, 3])]), error: null }),
     upload: async () => ({ error: null }),
+    remove: async () => ({ error: null }),
     ...over,
   }
 }
