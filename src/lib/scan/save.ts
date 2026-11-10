@@ -7,11 +7,11 @@ import { fromStoredDate, toStoredDate } from './format'
 import { compressReceiptImage, ScanImageError, type CompressedImage } from './image'
 import { receiptStoredName } from './downloadName'
 import type { DuplicateInfo } from './model'
-import type { ScanStore } from './store'
+import type { DuplicateKey, ScanStore } from './store'
 import type { ScanSaveData } from './validation'
 
 // Saving a scanned receipt = the SAME road as any other document into the SAME table:
-//   1. the identity (vendor, doc_number, doc_type) is looked up FIRST — a collision is handed back to
+//   1. the document's identity (normalised doc_number + date + total, + tax id when both sides have one) is looked up FIRST — a collision is handed back to
 //      the screen, never dropped silently (and the photo is not even stored);
 //   2. the photo (re-verified here: a client is never trusted to have compressed it) goes to the
 //      private bucket;
@@ -42,11 +42,12 @@ export interface SaveInput {
 export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Promise<SaveResult> {
   const { data, actorId } = input
   const docType = normalizeDocType(data.doc_type)
+  const key: DuplicateKey = { docNumber: data.doc_number, date: data.date, total: data.total, vendorTaxId: data.vendor_tax_id }
 
   // 1 — the identity, before any heavy work or any write.
   let existing: DuplicateInfo | null
   try {
-    existing = await store.findDuplicate({ vendor: data.vendor, docNumber: data.doc_number, docType })
+    existing = await store.findDuplicate(key)
   } catch {
     return { kind: 'failed', stage: 'lookup' }
   }
@@ -130,7 +131,7 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
     if (result.duplicate) {
       let again: DuplicateInfo | null = null
       try {
-        again = await store.findDuplicate({ vendor: data.vendor, docNumber: data.doc_number, docType })
+        again = await store.findDuplicate(key)
       } catch {
         /* the collision is reported either way */
       }

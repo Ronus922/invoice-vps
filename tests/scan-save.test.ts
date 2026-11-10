@@ -1,10 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { ScanImageError, type CompressedImage } from '@/lib/scan/image'
 import type { DuplicateInfo } from '@/lib/scan/model'
 import { saveScannedReceipt, type SaveInput } from '@/lib/scan/save'
-import { findDuplicateIn, isScanObjectPath, type InsertResult, type ScanStore } from '@/lib/scan/store'
+import { isScanObjectPath, type InsertResult, type ScanStore } from '@/lib/scan/store'
 import { scanSaveSchema, type ScanSaveData } from '@/lib/scan/validation'
 
 // The invariant of the whole feature: a scanned receipt takes the SAME road into the SAME table as every
@@ -56,7 +55,7 @@ const run = (store: ScanStore, d: ScanSaveData, extra: Partial<SaveInput> = {}) 
   saveScannedReceipt(store, { data: d, image: JPEG, actorId: ACTOR, compress: async () => img(), now: () => new Date('2026-11-09T12:00:00Z'), ...extra })
 
 describe('the duplicate is looked up FIRST and handed back — never silently dropped', () => {
-  it('an existing (vendor, doc_number, doc_type) stops the save before the photo is processed, stored or inserted', async () => {
+  it('an existing row with the same document identity stops the save before the photo is processed, stored or inserted', async () => {
     const { store, log } = fakeStore({ existing: EXISTING })
     const compress = vi.fn(async () => img())
     const res = await run(store, data(), { compress })
@@ -77,12 +76,22 @@ describe('the duplicate is looked up FIRST and handed back — never silently dr
     expect(await run(store, data())).toEqual({ kind: 'duplicate', existing: null })
   })
 
-  it('looks up by the CANONICAL doc type (a free-text Hebrew label hits the same key the table uses)', async () => {
+  it('looks up by the document identity — number, date, total, tax id — and not by the vendor or the doc type', async () => {
     const seen: unknown[] = []
     const { store } = fakeStore()
     store.findDuplicate = async (k) => { seen.push(k); return null }
-    await run(store, data({ doc_type: 'חשבונית מס קבלה' }))
-    expect(seen[0]).toEqual({ vendor: 'שופרסל', docNumber: '4455', docType: 'invoice_receipt' })
+    await run(store, data({ doc_type: 'חשבונית מס קבלה', vendor: 'כל שם אחר' }))
+    expect(seen[0]).toEqual({ docNumber: '4455', date: '2026-11-09', total: 45, vendorTaxId: '512345678' })
+  })
+
+  it('asks the same question again after a unique-index hit, with the same key', async () => {
+    const seen: unknown[] = []
+    const { store } = fakeStore({ insert: { ok: false, duplicate: true } })
+    const original = store.findDuplicate
+    store.findDuplicate = async (k) => { seen.push(k); return original(k) }
+    await run(store, data())
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toEqual(seen[0])
   })
 })
 
@@ -207,42 +216,6 @@ describe('the request body cannot set anything it should not', () => {
     expect(scanSaveSchema.safeParse({ ...base, total: 1e12 }).success).toBe(false)
     expect(scanSaveSchema.safeParse({ ...base, total: Number.NaN }).success).toBe(false)
     expect(scanSaveSchema.safeParse({ ...base, total: 1, ocr_fields: { x: 'y'.repeat(5000) } }).success).toBe(false)
-  })
-})
-
-describe('findDuplicateIn — the identity lookup', () => {
-  function fakeDb(rows: Record<string, unknown>[], error: { code: string } | null = null) {
-    const eqs: [string, unknown][] = []
-    const q: Record<string, unknown> = {}
-    q.select = () => q
-    q.eq = (c: string, v: unknown) => { eqs.push([c, v]); return q }
-    q.limit = async () => ({ data: rows, error })
-    const from = vi.fn(() => q)
-    return { db: { from } as unknown as SupabaseClient, eqs, from }
-  }
-  const row = (vendor: string) => ({ ...EXISTING, vendor })
-
-  it('matches on doc_number + canonical doc_type in the query, then on the vendor', async () => {
-    const { db, eqs } = fakeDb([row('שופרסל')])
-    expect(await findDuplicateIn(db, { vendor: 'שופרסל', docNumber: ' 4455 ', docType: 'קבלה' })).toMatchObject({ id: EXISTING.id })
-    expect(eqs).toEqual([['doc_number', '4455'], ['doc_type', 'receipt']])
-  })
-  it('treats vendor spellings that differ only by case, quotes or spacing as the same vendor', async () => {
-    const { db } = fakeDb([row('Super  "Pharm"')])
-    expect(await findDuplicateIn(db, { vendor: 'super pharm', docNumber: '1', docType: 'receipt' })).not.toBeNull()
-  })
-  it('a different vendor with the same number is not a duplicate', async () => {
-    const { db } = fakeDb([row('מגה')])
-    expect(await findDuplicateIn(db, { vendor: 'שופרסל', docNumber: '4455', docType: 'receipt' })).toBeNull()
-  })
-  it('no document number means no identity: nothing is queried', async () => {
-    const { db, from } = fakeDb([row('שופרסל')])
-    expect(await findDuplicateIn(db, { vendor: 'שופרסל', docNumber: '  ', docType: 'receipt' })).toBeNull()
-    expect(from).not.toHaveBeenCalled()
-  })
-  it('a lookup error is thrown, not read as "no duplicate"', async () => {
-    const { db } = fakeDb([], { code: '57P01' })
-    await expect(findDuplicateIn(db, { vendor: 'x', docNumber: '1', docType: 'receipt' })).rejects.toThrow('duplicate_lookup_failed')
   })
 })
 

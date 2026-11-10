@@ -34,8 +34,13 @@ export const scanSaveSchema = z.object({
 
 export type ScanSaveData = z.infer<typeof scanSaveSchema>
 
+// The early warning asks about the document's identity (src/lib/doc-identity.ts): number, date, total, tax id.
+// Vendor and doc type are not part of it; a client that still sends them is simply ignored (zod drops unknown keys).
 export const duplicateQuerySchema = z.object({
-  vendor: z.string().trim().max(200),
   doc_number: z.string().trim().max(100),
-  doc_type: z.string().trim().max(30),
+  /** The form's YYYY-MM-DD, or ''. */
+  date: z.string().trim().max(10).default(''),
+  /** The form's typed total ("61.10", "1,234.50"), or ''. */
+  total: z.string().trim().max(30).default(''),
+  vendor_tax_id: z.string().trim().max(20).default(''),
 })

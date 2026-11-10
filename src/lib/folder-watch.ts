@@ -2,6 +2,7 @@ import { InvoiceEntity, type Invoice } from '@/lib/entities'
 import { uploadFile } from '@/lib/upload'
 import { applyRememberedCategory, rememberVendorCategory } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
+import { findDuplicateInList } from '@/lib/doc-identity'
 
 const IDB_NAME = 'invoiceflow-folder-watch'
 const IDB_STORE = 'handles'
@@ -206,19 +207,11 @@ async function runFolderScanLocked(
 
       const extracted = applyRememberedCategory(await res.json())
       const docType = normalizeDocType(extracted.doc_type)
-      const docNum = String(extracted.doc_number ?? '').trim()
 
-      // Fast client-side pre-check on the full identity key (vendor, doc_number,
-      // doc_type). The DB unique index is the real guarantee — this only avoids a
-      // needless upload+insert round-trip when the snapshot already has the row.
-      const isDuplicate =
-        docNum !== '' &&
-        existingInvoices.some(
-          (inv) =>
-            inv.doc_number === extracted.doc_number &&
-            inv.vendor === extracted.vendor &&
-            (inv.doc_type ?? 'unknown') === docType
-        )
+      // Fast client-side pre-check on the document's identity (src/lib/doc-identity.ts: normalised doc_number +
+      // date + total, + tax id when both sides have one — not the vendor's spelling, not the doc type). The server
+      // (POST /api/invoices) checks again and is the real guard — this only avoids a needless round-trip.
+      const isDuplicate = findDuplicateInList(existingInvoices, extracted) !== null
       if (isDuplicate) {
         progress.duplicates += 1
         // Treat duplicate as a successful processing — remove the source file.
@@ -239,7 +232,7 @@ async function runFolderScanLocked(
       })
 
       if (created && 'duplicate' in created) {
-        // DB-level dedup caught a duplicate the snapshot missed (racy re-scan or
+        // The server's dedup caught a duplicate the snapshot missed (racy re-scan or
         // two parallel scans). No row created — count it as a duplicate.
         progress.duplicates += 1
       } else {

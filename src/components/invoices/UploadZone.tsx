@@ -18,6 +18,7 @@ import {
   rememberVendorCategory,
 } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
+import { findDuplicateInList } from '@/lib/doc-identity'
 import { splitUploads } from '@/lib/scan/files'
 import ScanOverlay from '@/components/scan/ScanOverlay'
 
@@ -94,18 +95,11 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
 
           const extracted = applyRememberedCategory(await res.json())
           const docType = normalizeDocType(extracted.doc_type)
-          const docNum = String(extracted.doc_number ?? '').trim()
 
-          // Fast pre-check on the full identity key (vendor, doc_number, doc_type).
-          // The DB unique index is the real guard; this avoids a needless round-trip.
-          const isDuplicate =
-            docNum !== '' &&
-            existingRef.current.some(
-              (inv) =>
-                inv.doc_number === extracted.doc_number &&
-                inv.vendor === extracted.vendor &&
-                (inv.doc_type ?? 'unknown') === docType
-            )
+          // Fast pre-check on the document's identity (src/lib/doc-identity.ts: normalised doc_number + date + total,
+          // + tax id when both sides have one — not the vendor's spelling, not the doc type). The server
+          // (POST /api/invoices) checks again and is the real guard; this avoids a needless round-trip.
+          const isDuplicate = findDuplicateInList(existingRef.current, extracted) !== null
           if (isDuplicate) {
             setQueue((prev) =>
               prev.map((q) =>
@@ -126,7 +120,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           })
 
           if (created && 'duplicate' in created) {
-            // DB-level dedup caught a duplicate the snapshot missed.
+            // The server's dedup caught a duplicate the snapshot missed.
             setQueue((prev) =>
               prev.map((q) =>
                 q === item || (q.name === item.name && q.status === 'processing')

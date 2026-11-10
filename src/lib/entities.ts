@@ -56,9 +56,9 @@ export const InvoiceEntity = {
     return (await res.json()) as Invoice[]
   },
 
-  // On a (vendor, doc_number, doc_type) unique-index conflict the server returns
-  // { duplicate: true } (200) instead of a row — the write-time dedup that closes
-  // the racy-rescan window. Callers must check for it before treating as created.
+  // When the server finds the same document already stored (src/lib/doc-identity.ts) — or the (vendor,
+  // doc_number, doc_type) unique index rejects the row — it returns { duplicate: true } (200) instead of a row:
+  // the write-time dedup. Callers must check for it before treating as created.
   async create(record: Partial<Invoice>): Promise<Invoice | { duplicate: true }> {
     const res = await fetch('/api/invoices', {
       method: 'POST',

@@ -1,7 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { normalizeDocType } from '@/lib/doc-type'
-import { normalizeVendorName } from '@/lib/vendor-utils'
 import { storagePathFromFileUrl } from '@/lib/file-url'
+import { findDuplicateDocument } from '@/lib/find-duplicate-document'
 import type { CompressedImage } from './image'
 import type { DuplicateInfo } from './model'
 
@@ -24,33 +23,28 @@ export type InsertResult =
   | { ok: false; duplicate: true }
   | { ok: false; duplicate: false; message: string }
 
+/** What identifies a document (src/lib/doc-identity.ts): the vendor's spelling and the doc type are not part of it.
+ *  `date` is the form's YYYY-MM-DD (or the table's DD/MM/YYYY — both are read). */
+export interface DuplicateKey {
+  docNumber: string
+  date: string | null
+  total: number | null
+  vendorTaxId: string | null
+}
+
 export interface ScanStore {
-  /** The existing document with this identity (vendor, doc_number, doc_type), or null. */
-  findDuplicate(key: { vendor: string; docNumber: string; docType: string }): Promise<DuplicateInfo | null>
+  /** The existing row that is the same document (normalised doc_number + date + total, + tax id when both have one), or null. */
+  findDuplicate(key: DuplicateKey): Promise<DuplicateInfo | null>
   /** Stores the photo in the private bucket; returns the object path and the file_url every row of the table uses. */
   uploadPhoto(img: Pick<CompressedImage, 'bytes' | 'contentType' | 'ext'>): Promise<{ path: string; fileUrl: string }>
   removePhoto(path: string): Promise<boolean>
   insertInvoice(row: Record<string, unknown>): Promise<InsertResult>
 }
 
-const DUP_COLUMNS = 'id, vendor, doc_number, doc_type, date, total, currency, source, created_at'
-
-/** Identity key used everywhere in this app: (vendor, doc_number, doc_type). The DB's unique index compares the
- *  strings exactly; this check also treats vendor spellings that differ only by case, quotes or spacing as the same
- *  vendor (normalizeVendorName) — the OCR re-spells the same company often enough to have duplicated rows before. */
-export async function findDuplicateIn(
-  db: SupabaseClient,
-  key: { vendor: string; docNumber: string; docType: string },
-): Promise<DuplicateInfo | null> {
-  const docNumber = key.docNumber.trim()
-  if (docNumber === '') return null // the unique index ignores rows without a number, so there is no identity to compare
-  const docType = normalizeDocType(key.docType)
-  // 1000 = PostgREST's own row ceiling: the lookup must see EVERY row that shares the number and type, or a match
-  // beyond an arbitrary first page would let a duplicate through (legacy rows are not covered by the unique index).
-  const { data, error } = await db.from('invoices').select(DUP_COLUMNS).eq('doc_number', docNumber).eq('doc_type', docType).limit(1000)
-  if (error) throw new Error(`duplicate_lookup_failed:${error.code ?? 'unknown'}`)
-  const wanted = normalizeVendorName(key.vendor)
-  const hit = (data ?? []).find((r) => normalizeVendorName(String(r.vendor ?? '')) === wanted)
+/** The identity lookup (src/lib/find-duplicate-document.ts) for a scan: no document number or no total = no identity = null.
+ *  A database error is thrown, never read as "no duplicate". */
+export async function findDuplicateIn(db: Pick<SupabaseClient, 'from'>, key: DuplicateKey): Promise<DuplicateInfo | null> {
+  const hit = await findDuplicateDocument(db, { doc_number: key.docNumber, date: key.date, total: key.total, vendor_tax_id: key.vendorTaxId })
   return hit ? (hit as unknown as DuplicateInfo) : null
 }
 
@@ -81,7 +75,7 @@ export function supabaseScanStore(): ScanStore {
     async insertInvoice(row) {
       const { data, error } = await admin().from('invoices').insert(row).select().single()
       if (error) {
-        // The partial unique index on (vendor, doc_number, doc_type) caught a same-identity row
+        // The partial unique index on (vendor, doc_number, doc_type) caught a same-document row
         // (a race the pre-check could not see). Reported, never swallowed.
         if (error.code === '23505') return { ok: false, duplicate: true }
         console.error('[scan] insert failed', { code: error.code })

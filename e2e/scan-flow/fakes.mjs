@@ -38,6 +38,11 @@ export async function startFakes({ supabasePort, anthropicPort }) {
       if (req.method === 'GET') {
         let out = rows
         for (const [k, v] of u.searchParams) if (v.startsWith('eq.')) out = out.filter((r) => String(r[k]) === v.slice(3))
+        // PostgREST pages: supabase-js .range(a, b) sends offset=a&limit=b-a+1. fetchAllRows (the duplicate lookup) keeps
+        // asking until a page comes back empty, so a fake that ignores these would answer the same rows for ever.
+        const offset = Number(u.searchParams.get('offset') ?? 0)
+        const limit = u.searchParams.get('limit')
+        out = out.slice(offset, limit === null ? undefined : offset + Number(limit))
         const sel = u.searchParams.get('select')
         const cols = sel && sel !== '*' ? sel.split(',').map((c) => c.trim()) : null
         return json(res, 200, out.map((r) => (cols ? Object.fromEntries(cols.map((c) => [c, r[c] ?? null])) : r)))

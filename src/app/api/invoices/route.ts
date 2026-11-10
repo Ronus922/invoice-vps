@@ -8,6 +8,7 @@ import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } fro
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { finalizeInvoicePayload } from '@/lib/invoice-write'
 import { fetchAllRows } from '@/lib/fetch-all-rows'
+import { findDuplicateDocument } from '@/lib/find-duplicate-document'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -149,6 +150,20 @@ export async function POST(request: NextRequest) {
   // doc_type canonicalisation, non-invoice gate, identity coercion and the VAT fallback —
   // one shared step (src/lib/invoice-write.ts) so the receipt scan takes the same road.
   finalizeInvoicePayload(payload)
+
+  // Write-time dedup on the document's identity (src/lib/doc-identity.ts): normalised doc_number + date + total
+  // (+ the vendor's tax id when both sides have one). The vendor's spelling and the doc_type are not part of it.
+  // Reported as a skipped duplicate (200, no row) — the same answer the unique-index hit below gives. A failed
+  // lookup does not block the insert: the unique index on (vendor, doc_number, doc_type) is still the net.
+  try {
+    const existing = await findDuplicateDocument(supabase, payload)
+    if (existing) {
+      console.warn('[invoices POST] duplicate skipped: same document as', existing.id)
+      return NextResponse.json({ duplicate: true }, { status: 200 })
+    }
+  } catch (err) {
+    console.error('[invoices POST] duplicate lookup failed, relying on the unique index:', err instanceof Error ? err.message : err)
+  }
 
   const vendor = String(payload.vendor || '').trim()
   const category = String(payload.category || '').trim()
