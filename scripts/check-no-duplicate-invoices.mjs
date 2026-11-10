@@ -56,6 +56,15 @@ function auditRealDb() {
   if (exactDupRows === '0') ok('אין רשומות כפולות זהות ב-DB האמיתי')
   else fail(`${exactDupRows} רשומות כפולות זהות (re-scan) — יש לאחד. הרץ scripts/dedup-cleanup.mjs`)
 
+  // The unique index on the DOCUMENT IDENTITY (docs/document-identity.md; supabase/migrations/20261110_add_document_identity_index.sql)
+  // is what keeps a document from being stored twice: it must exist and be valid (a failed CONCURRENTLY build leaves it invalid).
+  const identityIndex = scalar(`
+    select coalesce(bool_and(i.indisunique and i.indisvalid and i.indisready), false)
+    from pg_index i join pg_class c on c.oid = i.indexrelid
+    where c.relname = 'invoices_document_identity_uniq'`)
+  if (identityIndex === 't') ok('האינדקס הייחודי על זהות המסמך (invoices_document_identity_uniq) קיים ותקין')
+  else fail('האינדקס הייחודי על זהות המסמך חסר או לא תקין — supabase/migrations/20261110_add_document_identity_index.sql (CONCURRENTLY, לא בטרנזקציה)')
+
   // Informational: variant groups sharing the identity key (vendor, doc_number,
   // doc_type) but differing in content — re-scan/rename twins, manual vs folder.
   // Not a failure — Ronen resolves these in the UI (see TESTING.md).

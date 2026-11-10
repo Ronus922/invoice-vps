@@ -309,3 +309,26 @@ describe('PATCH /api/invoices — vendor_tax_id is normalised like on POST', () 
     expect('vendor_tax_id' in fake.updates[0]!.values).toBe(false)
   })
 })
+
+describe('PATCH /api/invoices — the identity index refuses an edit that would duplicate another document', () => {
+  beforeEach(() => {
+    fake.reset({ invoices: [{ id: 'row-1', vendor: 'MAX', doc_number: '5', doc_type: 'invoice', date: '01/07/2026', total: 50, currency: 'ILS', created_at: '2026-07-02T10:00:00Z' }] })
+    auth.user = { id: 'u1' }
+  })
+  const patch = async (body: Record<string, unknown>) => {
+    const { PATCH } = await import('@/app/api/invoices/route')
+    return PATCH(new NextRequest('http://localhost/api/invoices', { method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }))
+  }
+
+  it('23505 is a 409 with a clear Hebrew message — not a generic 500', async () => {
+    fake.updateError = { message: 'duplicate key value violates unique constraint "invoices_document_identity_uniq"', code: '23505' }
+    const res = await patch({ id: 'row-1', doc_number: '6' })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { error: string }).error).toMatch(/קיים כבר מסמך אחר/)
+  })
+
+  it('any other database error stays a 500', async () => {
+    fake.updateError = { message: 'boom', code: 'XX000' }
+    expect((await patch({ id: 'row-1', doc_number: '6' })).status).toBe(500)
+  })
+})

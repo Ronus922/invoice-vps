@@ -46,8 +46,27 @@ describe('the identity is asked the same way at every entry point', () => {
     }
   })
 
-  it('there is still NO unique index on the new identity (the table holds duplicates until the cleanup): no migration adds one', () => {
-    // docs/document-identity.md, "After the cleanup": the index is a step for later, after Ronen's cleanup.
-    expect(read('docs/document-identity.md')).toMatch(/אחרי הניקוי/)
+  it('the unique index on the identity exists as a migration — CONCURRENTLY, outside any transaction, mirroring doc-identity.ts', () => {
+    const sql = read('supabase/migrations/20261110_add_document_identity_index.sql')
+    const code = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n') // comments out
+    expect(code).toMatch(/CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS invoices_document_identity_uniq\s+ON public\.invoices \(/)
+    expect(code).not.toMatch(/\b(BEGIN|COMMIT|START TRANSACTION)\b/i) // CONCURRENTLY cannot run inside a transaction
+    expect(code).not.toMatch(/\bWHERE\b/i) // not partial: every row with an identity is covered
+    // the three parts of the key, as normalizeDocNumber / normalizeDocDate / totalToCents compute them
+    expect(code).toContain("upper(normalize(doc_number, NFKC))")
+    expect(code).toContain("'[^[:alnum:]]'")
+    expect(code).toContain("ltrim(")
+    expect(code).toContain("round(total * 100)")
+    expect(code).toMatch(/<\?unknown>\?/) // a missing date is '<UNKNOWN>' in the table
+    // neither the vendor nor the doc_type is in the key
+    expect(code).not.toMatch(/\b(vendor|doc_type|vendor_tax_id)\b/)
+    expect(read('docs/document-identity.md')).toMatch(/invoices_document_identity_uniq/)
+  })
+
+  it('every writer reports a unique-index hit (23505) as a duplicate, and an edit answers 409', () => {
+    expect(read('src/app/api/invoices/route.ts')).toMatch(/error\.code === '23505'[\s\S]{0,900}duplicate: true/)
+    expect(read('src/app/api/invoices/route.ts')).toMatch(/error\.code === '23505'[\s\S]{0,600}status: 409/)
+    expect(read('src/app/api/scan-gmail/route.ts')).toMatch(/insertError\.code === '23505'[\s\S]{0,200}status: 'duplicate'/)
+    expect(read('src/lib/scan/store.ts')).toMatch(/23505[\s\S]{0,80}duplicate:\s*true/)
   })
 })
