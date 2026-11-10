@@ -11,8 +11,14 @@
 // page to the next, and rows would be repeated or skipped.
 //
 // The loop steps by the rows a page actually returned (not by the nominal page size) and stops only on an
-// empty page, so it stays correct even if the server cap is ever set below `pageSize`. A row inserted
-// between two pages can shift the next page by one: pass `key` to drop the repeated row.
+// empty page, so it stays correct even if the server cap is ever set below `pageSize`.
+//
+// What it does NOT promise: a snapshot. Paging by offset reads the table over a few milliseconds while others
+// may write to it. A row inserted before the cursor shifts the next page by one and repeats a row: pass `key`
+// and the repeat is dropped. A row DELETED before the cursor, or one whose sort column is UPDATED so it
+// crosses the cursor, can make one row be skipped (or seen twice, with `key` keeping the first copy). The
+// next load is correct; for a list the user can reload that is acceptable, for a job that must not miss a
+// row, run it again or take the rows by id.
 
 export const PAGE_SIZE = 1000
 const MAX_ROWS = 200_000

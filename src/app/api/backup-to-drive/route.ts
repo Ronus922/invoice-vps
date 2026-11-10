@@ -29,7 +29,10 @@ interface InvoiceRow {
   drive_file_id: string | null
 }
 
-const INVOICE_COLUMNS = 'id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id'
+// How many pending invoices one normal (non-force) run uploads. 1000 is also PostgREST's own response cap,
+// so this is what a run always did; naming it keeps it a decision instead of a silent server limit.
+const PENDING_BATCH = 1000
+const INVOICE_COLUMNS ='id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id'
 
 interface ProgressSnapshot {
   phase: 'init' | 'reorganizing' | 'uploading' | 'done'
@@ -236,20 +239,20 @@ export async function POST(request: NextRequest) {
 
     // Pass 2 — upload pending invoices (backed_up_to_drive_at IS NULL),
     // newest first so the invoices just uploaded reach Drive immediately.
-    // Every matching row, not just the first 1000 (see fetchAllRows). In force mode that is every invoice
-    // with a file; otherwise only the ones still waiting for Drive.
-    const { data: rows, error: selectError } = await fetchAllRows<InvoiceRow>(
-      (from, to) => {
-        const query = supabase
-          .from('invoices')
-          .select(INVOICE_COLUMNS)
-          .not('file_url', 'is', null)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: true })
-        return (force ? query : query.is('backed_up_to_drive_at', null)).range(from, to)
-      },
-      { key: (row) => row.id },
-    )
+    // Force = every invoice with a file, so it must read ALL of them (fetchAllRows; a plain select would
+    // stop silently at 1000 and the oldest invoices would never be re-checked). A normal run uploads the
+    // pending ones in batches of PENDING_BATCH, newest first: the rest is picked up by the next run (the
+    // Drive token is fetched once per run, so a run is kept bounded). Same batch size as before, now explicit.
+    const pendingQuery = () =>
+      supabase
+        .from('invoices')
+        .select(INVOICE_COLUMNS)
+        .not('file_url', 'is', null)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+    const { data: rows, error: selectError } = force
+      ? await fetchAllRows<InvoiceRow>((from, to) => pendingQuery().range(from, to), { key: (row) => row.id })
+      : await pendingQuery().is('backed_up_to_drive_at', null).limit(PENDING_BATCH)
     if (selectError) throw new Error(`DB select failed: ${selectError.message}`)
 
     const invoices: InvoiceRow[] = (rows as InvoiceRow[] | null) ?? []
