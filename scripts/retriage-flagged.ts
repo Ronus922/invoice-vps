@@ -17,9 +17,10 @@ import {
   INVOICE_EXTRACTION_MAX_TOKENS,
   EXTRACTION_TOOL,
 } from '../src/lib/invoice-extraction-prompt'
-import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '../src/lib/doc-type'
+import { normalizeDocType, isNonInvoiceDocType } from '../src/lib/doc-type'
 import { validateInvoiceArithmetic } from '../src/lib/invoice-validation'
 import { storagePathFromFileUrl } from '../src/lib/file-url'
+import { fetchFlaggedRows, type FlaggedRow as Row } from '../src/lib/flagged-rows'
 
 for (const line of readFileSync(new URL('../.env.local', import.meta.url), 'utf8').split('\n')) {
   const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
@@ -36,18 +37,6 @@ const EXT_MEDIA: Record<string, string> = {
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
-}
-
-interface Row {
-  id: string
-  vendor: string
-  doc_number: string
-  total: number
-  pretax: number | null
-  vat: number | null
-  file_url: string | null
-  file_name: string | null
-  date: string | null
 }
 
 async function judge(row: Row): Promise<{ docType: string; total: number | null; docNumber: string } | null> {
@@ -95,13 +84,9 @@ async function judge(row: Row): Promise<{ docType: string; total: number | null;
 }
 
 async function main() {
-  const { data: rows, error } = await supabase
-    .from('invoices')
-    .select('id, vendor, doc_number, total, pretax, vat, file_url, file_name, date')
-    .eq('needs_review', true)
-    .eq('validation_error', NON_INVOICE_REVIEW_MESSAGE)
-    .order('created_at', { ascending: true })
-  if (error) throw error
+  // Every flagged row, not just the first 1000 the shared PostgREST answers with (src/lib/flagged-rows.ts).
+  const { data: rows, error } = await fetchFlaggedRows(supabase)
+  if (error) throw new Error(`could not load the flagged rows: ${error.message}`)
 
   console.log(`${rows!.length} flagged rows to re-judge (${APPLY ? 'APPLY' : 'dry run'})`)
   const kept: string[] = []
