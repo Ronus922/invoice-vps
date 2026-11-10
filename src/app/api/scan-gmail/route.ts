@@ -22,7 +22,10 @@ import { v4 as uuidv4 } from 'uuid'
 import { safeEqual } from '@/lib/safe-compare'
 import { fetchAllRows } from '@/lib/fetch-all-rows'
 import { findDuplicateDocument } from '@/lib/find-duplicate-document'
-import { documentIdentity, identityKey } from '@/lib/doc-identity'
+import { documentIdentity, identityKey, normalizeTaxId } from '@/lib/doc-identity'
+import { duplicateAction } from '@/lib/doc-upgrade'
+import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
+import { applyCreditNoteSign } from '@/lib/credit-note'
 import { withKeyLock } from '@/lib/key-lock'
 import { ownSendReason } from '@/lib/own-send'
 
@@ -166,6 +169,8 @@ interface ProcessResult {
   filename: string
   vendor?: string
   reason?: string
+  /** A 'duplicate' that replaced the file and type of a stored RECEIPT with this tax invoice (src/lib/doc-upgrade.ts). */
+  upgraded?: boolean
 }
 
 interface ProgressSnapshot {
@@ -408,6 +413,10 @@ async function processAttachment(
     ) as ExtractedInvoice
     extracted.currency = normalizeCurrency(extracted.currency)
     extracted.doc_type = normalizeDocType(extracted.doc_type)
+    // The issuer's tax id: 8–9 digits or nothing (a garbled value must not split one document into two issuers).
+    extracted.vendor_tax_id = normalizeTaxId(extracted.vendor_tax_id) || undefined
+    // A credit note is stored negative (src/lib/credit-note.ts) — before the VAT fallback below derives from the signed total.
+    applyCreditNoteSign(extracted)
 
     // POSITIVE intake gate (policy 2026-07-30): only bookable documents enter
     // the system from email. 'other' (contracts, letters, quotes, legal docs)
@@ -485,6 +494,28 @@ async function processAttachment(
             vendor_tax_id: extracted.vendor_tax_id,
           })
           if (existing) {
+            // Decision 1: a tax invoice for a document stored as a RECEIPT replaces that row's file and type.
+            if (duplicateAction(existing.doc_type, extracted.doc_type) === 'upgrade') {
+              const upgrade = await upgradeReceiptToTaxInvoice(supabase, existing.id, {
+                file_url,
+                file_name: filename || `invoice_${Date.now()}.pdf`,
+                doc_type: extracted.doc_type,
+              })
+              if (upgrade.upgraded) {
+                // The object uploaded above is the stored row's file now: it must stay, whatever happens next.
+                rowCreated = true
+                console.warn('[scan-gmail] receipt upgraded to a tax invoice:', existing.id)
+                return { status: 'duplicate', filename, vendor: extracted.vendor, upgraded: true }
+              }
+              if (upgrade.reason === 'db_error') {
+                // The outcome is unknown (the update may have been committed): keep the uploaded object — a row may point at
+                // it — and report an error, so the message is scanned again instead of being counted as a duplicate.
+                rowCreated = true
+                console.error('[scan-gmail] receipt upgrade failed (db error) for', existing.id)
+                return { status: 'error', filename }
+              }
+              console.warn('[scan-gmail] upgrade not applied (%s) — handled as a duplicate of %s', upgrade.reason, existing.id)
+            }
             await removeUploadedObject()
             return { status: 'duplicate', filename, vendor: extracted.vendor }
           }

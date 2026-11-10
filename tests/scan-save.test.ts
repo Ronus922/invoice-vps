@@ -3,7 +3,7 @@ import { NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { ScanImageError, type CompressedImage } from '@/lib/scan/image'
 import type { DuplicateInfo } from '@/lib/scan/model'
 import { saveScannedReceipt, type SaveInput } from '@/lib/scan/save'
-import { isScanObjectPath, type InsertResult, type ScanStore } from '@/lib/scan/store'
+import { isScanObjectPath, type InsertResult, type ScanStore, type UpgradeResult } from '@/lib/scan/store'
 import { scanSaveSchema, type ScanSaveData } from '@/lib/scan/validation'
 
 // The invariant of the whole feature: a scanned receipt takes the SAME road into the SAME table as every
@@ -26,10 +26,11 @@ function data(over: Partial<ScanSaveData> = {}): ScanSaveData {
   })
 }
 
-function fakeStore(over: Partial<{ existing: DuplicateInfo | null; existingAfterRace: DuplicateInfo | null; insert: InsertResult; uploadFails: boolean }> = {}) {
+function fakeStore(over: Partial<{ existing: DuplicateInfo | null; existingAfterRace: DuplicateInfo | null; insert: InsertResult; uploadFails: boolean; upgrade: UpgradeResult; upgradeThrows: boolean }> = {}) {
   const log: string[] = []
   let lookups = 0
   const inserted: Record<string, unknown>[] = []
+  const upgrades: { id: string; input: { fileUrl: string; fileName: string; docType: string } }[] = []
   const store: ScanStore = {
     async findDuplicate() {
       log.push('find')
@@ -47,8 +48,14 @@ function fakeStore(over: Partial<{ existing: DuplicateInfo | null; existingAfter
       inserted.push(row)
       return over.insert ?? { ok: true, row: { ...row, id: 'new-id' } }
     },
+    async upgradeInvoice(id, input) {
+      log.push('upgrade')
+      if (over.upgradeThrows) throw new Error('db down')
+      upgrades.push({ id, input })
+      return over.upgrade ?? { ok: true, row: { id, doc_type: input.docType, file_url: input.fileUrl } }
+    },
   }
-  return { store, log, inserted }
+  return { store, log, inserted, upgrades }
 }
 
 const run = (store: ScanStore, d: ScanSaveData, extra: Partial<SaveInput> = {}) =>
@@ -229,5 +236,95 @@ describe('the image route only reads objects of the exact shape a scan stores', 
       'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg?x=1', 'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg/../../y', 'other/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg',
       'invoices/ec4bfa54-f75c-4ab6-82c0-903883aeaf1.jpg', 'invoices/sub/ec4bfa54-f75c-4ab6-82c0-903883aeaf14.jpg',
     ]) expect(isScanObjectPath(bad)).toBe(false)
+  })
+})
+
+// Decision 1 (2026-11-10): a tax invoice scanned over a stored RECEIPT of the same transaction upgrades that row
+// with the photo — no new row. A receipt over a tax invoice (or any other repeat) stays a duplicate; there is
+// still no "save anyway".
+describe('a scanned tax invoice upgrades a stored receipt of the same transaction', () => {
+  it('invoice over a receipt: the photo is stored and the EXISTING row takes it and the type — nothing is inserted', async () => {
+    const { store, log, inserted, upgrades } = fakeStore({ existing: EXISTING }) // EXISTING is a receipt
+    const res = await run(store, data({ doc_type: 'invoice' }))
+    expect(res).toEqual({ kind: 'upgraded', invoice: { id: EXISTING.id, doc_type: 'invoice', file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/abc.jpg' } })
+    expect(log).toEqual(['find', 'upload', 'upgrade']) // no insert, no photo removal
+    expect(inserted).toHaveLength(0)
+    expect(upgrades).toHaveLength(1)
+    expect(upgrades[0]!.id).toBe(EXISTING.id)
+    expect(upgrades[0]!.input.docType).toBe('invoice')
+    expect(upgrades[0]!.input.fileUrl).toMatch(/invoices\/abc\.jpg$/)
+    expect(upgrades[0]!.input.fileName).toMatch(/\.jpg$/)
+  })
+
+  it('a tax invoice/receipt upgrades too', async () => {
+    const { store, upgrades } = fakeStore({ existing: EXISTING })
+    const res = await run(store, data({ doc_type: 'invoice_receipt' }))
+    expect(res.kind).toBe('upgraded')
+    expect(upgrades[0]!.input.docType).toBe('invoice_receipt')
+  })
+
+  it('a receipt over a receipt is a duplicate: nothing is uploaded or changed', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING })
+    expect(await run(store, data({ doc_type: 'receipt' }))).toEqual({ kind: 'duplicate', existing: EXISTING })
+    expect(log).toEqual(['find'])
+  })
+
+  it('a receipt over a stored TAX INVOICE is a duplicate', async () => {
+    const taxInvoice = { ...EXISTING, doc_type: 'invoice' as const }
+    const { store, log } = fakeStore({ existing: taxInvoice })
+    expect(await run(store, data({ doc_type: 'receipt' }))).toEqual({ kind: 'duplicate', existing: taxInvoice })
+    expect(log).toEqual(['find'])
+  })
+
+  it('an invoice over a stored invoice (or an unknown row) is a duplicate: only a RECEIPT is ever replaced', async () => {
+    for (const stored of ['invoice', 'invoice_receipt', 'unknown', 'credit_note'] as const) {
+      const { store, log } = fakeStore({ existing: { ...EXISTING, doc_type: stored } })
+      expect((await run(store, data({ doc_type: 'invoice' }))).kind, stored).toBe('duplicate')
+      expect(log, stored).toEqual(['find'])
+    }
+  })
+
+  it('the row changed in the meantime (conclusively not upgraded): the stored photo is removed and the scan is reported as a duplicate', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING, upgrade: { ok: false, inconclusive: false } })
+    expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'duplicate', existing: EXISTING })
+    expect(log).toEqual(['find', 'upload', 'upgrade', 'remove:invoices/abc.jpg'])
+  })
+
+  it('a database error during the upgrade fails the save and KEEPS the photo — the update may have been committed, so the photo may be the row\'s file', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING, upgradeThrows: true })
+    expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'failed', stage: 'insert' })
+    expect(log).toEqual(['find', 'upload', 'upgrade']) // no remove:…
+  })
+
+  it('an inconclusive answer from the store (a database error) also keeps the photo and asks to retry — it is not reported as a duplicate', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING, upgrade: { ok: false, inconclusive: true } })
+    expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'failed', stage: 'insert' })
+    expect(log).toEqual(['find', 'upload', 'upgrade'])
+  })
+})
+
+// Decision 5: a credit note is STORED negative, so it is LOOKED UP negative — the identity compares signed cents.
+describe('a scanned credit note is looked up with its signed total', () => {
+  it('a printed (positive) total on a credit note is looked up negative, and stored negative', async () => {
+    const seen: { total: number | null }[] = []
+    const { store, inserted } = fakeStore()
+    const spy: ScanStore = { ...store, async findDuplicate(key) { seen.push({ total: key.total }); return null } }
+    await run(spy, data({ doc_type: 'credit_note', total: 1652, pretax: 1400, vat: 252 }))
+    expect(seen[0]!.total).toBe(-1652)
+    expect(inserted[0]!.total).toBe(-1652)
+  })
+
+  it('so a second scan of the same credit note meets the stored (negative) row', async () => {
+    const stored: DuplicateInfo = { ...EXISTING, doc_number: '58857', doc_type: 'credit_note', total: -1652 }
+    const { store, log } = fakeStore({ existing: stored })
+    expect(await run(store, data({ doc_type: 'credit_note', doc_number: '58857', total: 1652, pretax: 1400, vat: 252 }))).toEqual({ kind: 'duplicate', existing: stored })
+    expect(log).toEqual(['find'])
+  })
+
+  it('an invoice keeps its positive total in the lookup', async () => {
+    const seen: (number | null)[] = []
+    const { store } = fakeStore()
+    await run({ ...store, async findDuplicate(key) { seen.push(key.total); return null } }, data({ doc_type: 'invoice', total: 118, pretax: 100, vat: 18 }))
+    expect(seen).toEqual([118])
   })
 })

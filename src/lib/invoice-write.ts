@@ -1,4 +1,5 @@
 import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
+import { applyCreditNoteSign } from '@/lib/credit-note'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 
 // DB has NOT NULL on vendor/doc_number; AI sometimes returns null when it
@@ -31,6 +32,10 @@ export function coerceRequiredIdentityFields(payload: Record<string, unknown>): 
 export function finalizeInvoicePayload(payload: Record<string, unknown>): void {
   // Always store a canonical doc_type (the DB CHECK rejects anything else).
   payload.doc_type = normalizeDocType(payload.doc_type)
+
+  // A credit note is stored with a NEGATIVE total, pre-tax and VAT (src/lib/credit-note.ts) — before the VAT
+  // fallback below, which then derives from the signed total.
+  applyCreditNoteSign(payload)
 
   // A positively-identified non-invoice (proforma / quote / delivery note)
   // must never reach the accountant automatically — force review.

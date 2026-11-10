@@ -13,6 +13,8 @@ import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { normalizeCurrency } from '@/lib/format'
 import { normalizeDocType } from '@/lib/doc-type'
+import { applyCreditNoteSign } from '@/lib/credit-note'
+import { normalizeTaxId } from '@/lib/doc-identity'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -83,6 +85,10 @@ export async function POST(request: NextRequest) {
       ) as Record<string, unknown>
       data.currency = normalizeCurrency(data.currency)
       data.doc_type = normalizeDocType(data.doc_type)
+      // The issuer's tax id: 8–9 digits or nothing (a garbled value must not split one document into two issuers).
+      data.vendor_tax_id = normalizeTaxId(data.vendor_tax_id) || null
+      // A credit note is stored negative (src/lib/credit-note.ts) — before the VAT fallback, which derives from the signed total.
+      applyCreditNoteSign(data)
       const extractedPretax = typeof data.pretax === 'number' ? data.pretax : null
       const extractedVat = typeof data.vat === 'number' ? data.vat : null
       const derivation = deriveVatFromTotal({

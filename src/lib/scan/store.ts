@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { storagePathFromFileUrl } from '@/lib/file-url'
 import { findDuplicateDocument } from '@/lib/find-duplicate-document'
+import type { DocType } from '@/lib/doc-type'
+import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
 import type { CompressedImage } from './image'
 import type { DuplicateInfo } from './model'
 
@@ -32,6 +34,9 @@ export interface DuplicateKey {
   vendorTaxId: string | null
 }
 
+/** `inconclusive`: a database error — the update may or may not have been committed, so the photo may be the row's file. */
+export type UpgradeResult = { ok: true; row: Record<string, unknown> } | { ok: false; inconclusive: boolean }
+
 export interface ScanStore {
   /** The existing row that is the same document (normalised doc_number + date + total, + tax id when both have one), or null. */
   findDuplicate(key: DuplicateKey): Promise<DuplicateInfo | null>
@@ -39,6 +44,10 @@ export interface ScanStore {
   uploadPhoto(img: Pick<CompressedImage, 'bytes' | 'contentType' | 'ext'>): Promise<{ path: string; fileUrl: string }>
   removePhoto(path: string): Promise<boolean>
   insertInvoice(row: Record<string, unknown>): Promise<InsertResult>
+  /** Decision 1 (src/lib/doc-upgrade.ts): the stored RECEIPT `existingId` takes this tax invoice's photo and type — no new
+   *  row. `ok: false` = it was not upgraded: conclusively (the row changed in the meantime — the caller removes the
+   *  photo) or `inconclusive` (a database error — the caller must KEEP the photo). */
+  upgradeInvoice(existingId: string, input: { fileUrl: string; fileName: string; docType: DocType }): Promise<UpgradeResult>
 }
 
 /** The identity lookup (src/lib/find-duplicate-document.ts) for a scan: no document number or no total = no identity = null.
@@ -70,6 +79,14 @@ export function supabaseScanStore(): ScanStore {
         return false
       }
       return true
+    },
+
+    async upgradeInvoice(existingId, input) {
+      const res = await upgradeReceiptToTaxInvoice(admin(), existingId, { file_url: input.fileUrl, file_name: input.fileName, doc_type: input.docType })
+      if (!res.upgraded) return { ok: false, inconclusive: res.reason === 'db_error' }
+      // The photo is the row's file from here on — if the read-back fails the answer is still "upgraded".
+      const { data } = await admin().from('invoices').select('*').eq('id', existingId).single()
+      return { ok: true, row: (data as Record<string, unknown> | null) ?? { id: existingId } }
     },
 
     async insertInvoice(row) {

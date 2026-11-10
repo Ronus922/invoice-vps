@@ -9,6 +9,9 @@ import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { finalizeInvoicePayload } from '@/lib/invoice-write'
 import { fetchAllRows } from '@/lib/fetch-all-rows'
 import { findDuplicateDocument } from '@/lib/find-duplicate-document'
+import { normalizeTaxId } from '@/lib/doc-identity'
+import { duplicateAction } from '@/lib/doc-upgrade'
+import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -43,6 +46,9 @@ const InvoiceWriteSchema = z.object({
   vendor: z.string().nullable().optional(),
   doc_number: z.string().nullable().optional(),
   doc_type: z.string().nullable().optional(),
+  // The issuer's tax id as the extraction read it (src/lib/invoice-extraction-prompt.ts). Normalised to 8–9 digits
+  // (or null) on the way in; it only matters to the identity check, and only when both sides have one.
+  vendor_tax_id: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   pretax: numericOrNull.optional(),
   vat: numericOrNull.optional(),
@@ -150,16 +156,42 @@ export async function POST(request: NextRequest) {
   // doc_type canonicalisation, non-invoice gate, identity coercion and the VAT fallback —
   // one shared step (src/lib/invoice-write.ts) so the receipt scan takes the same road.
   finalizeInvoicePayload(payload)
+  if ('vendor_tax_id' in payload) payload.vendor_tax_id = normalizeTaxId(payload.vendor_tax_id) || null
 
   // Write-time dedup on the document's identity (src/lib/doc-identity.ts): normalised doc_number + date + total
   // (+ the vendor's tax id when both sides have one). The vendor's spelling and the doc_type are not part of it.
   // Reported as a skipped duplicate (200, no row) — the same answer the unique-index hit below gives. A failed
   // lookup does not block the insert: the unique index on (vendor, doc_number, doc_type) is still the net.
+  // The answer carries the existing row's id, so the folder scan can confirm that row and its file are really there
+  // before it deletes its source file (src/lib/folder-watch.ts).
   try {
     const existing = await findDuplicateDocument(supabase, payload)
     if (existing) {
+      // Decision 1: a tax invoice for a document stored as a RECEIPT replaces that row's file and type — the one row
+      // of the transaction. Anything else (a receipt after a tax invoice, the same type twice) is a plain duplicate.
+      if (duplicateAction(existing.doc_type, payload.doc_type) === 'upgrade') {
+        const upgrade = await upgradeReceiptToTaxInvoice(supabase, existing.id, {
+          file_url: (payload.file_url as string | null | undefined) ?? null,
+          file_name: (payload.file_name as string | null | undefined) ?? null,
+          doc_type: payload.doc_type,
+        })
+        if (upgrade.upgraded) {
+          console.warn('[invoices POST] receipt upgraded to a tax invoice:', existing.id)
+          return NextResponse.json({ duplicate: true, upgraded: true, existing_id: existing.id }, { status: 200 })
+        }
+        // A database error leaves the outcome unknown (the update may have been committed): answer an error — never "duplicate" —
+        // so the caller keeps its file and tries again.
+        if (upgrade.reason === 'db_error') {
+          console.error('[invoices POST] receipt upgrade failed (db error) for', existing.id)
+          return NextResponse.json({ error: 'שדרוג הקבלה לחשבונית מס נכשל — נסה שוב' }, { status: 500 })
+        }
+        // Conclusively not upgraded (the row changed, a conflict). Say nothing about the existing row: with no existing_id
+        // the folder scan keeps its source file — which is now the only copy of this tax invoice.
+        console.warn('[invoices POST] upgrade not applied (%s) — duplicate of %s, source file not confirmed', upgrade.reason, existing.id)
+        return NextResponse.json({ duplicate: true }, { status: 200 })
+      }
       console.warn('[invoices POST] duplicate skipped: same document as', existing.id)
-      return NextResponse.json({ duplicate: true }, { status: 200 })
+      return NextResponse.json({ duplicate: true, existing_id: existing.id }, { status: 200 })
     }
   } catch (err) {
     console.error('[invoices POST] duplicate lookup failed, relying on the unique index:', err instanceof Error ? err.message : err)
@@ -190,7 +222,15 @@ export async function POST(request: NextRequest) {
         '[invoices POST] duplicate skipped (vendor, doc_number, doc_type):',
         payload.vendor, payload.doc_number, payload.doc_type
       )
-      return NextResponse.json({ duplicate: true }, { status: 200 })
+      // Name the row it collided with when the identity finds it; without an id the folder scan cannot confirm the
+      // existing row and keeps its source file.
+      let existingId: string | undefined
+      try {
+        existingId = (await findDuplicateDocument(supabase, payload))?.id
+      } catch {
+        /* no id: the caller keeps its source file */
+      }
+      return NextResponse.json({ duplicate: true, ...(existingId ? { existing_id: existingId } : {}) }, { status: 200 })
     }
     console.error('[invoices POST] supabase error:', error)
     return NextResponse.json(
@@ -218,6 +258,7 @@ export async function PATCH(request: NextRequest) {
   }
   const updates: Record<string, unknown> = { ...parsed.data }
   if ('doc_type' in updates) updates.doc_type = normalizeDocType(updates.doc_type)
+  if ('vendor_tax_id' in updates) updates.vendor_tax_id = normalizeTaxId(updates.vendor_tax_id) || null
   // On PATCH an empty total means "not provided" — dropping it keeps the
   // current value instead of zeroing a valid total (which would flag the row).
   if ('total' in updates && updates.total == null) delete updates.total

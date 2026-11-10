@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test'
 
 const protectedApiRoutes = [
   '/api/invoices',
+  '/api/invoices/verify?id=00000000-0000-4000-8000-000000000000', // the folder scan's "is the existing row and its file really there?"
   '/api/upload',
   '/api/extract-invoice',
   '/api/scan-gmail',

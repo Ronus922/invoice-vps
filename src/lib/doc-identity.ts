@@ -3,7 +3,7 @@
 //
 //   identity = normalised doc_number + date + total
 //              (+ vendor_tax_id, but only when BOTH sides have one — then they must agree)
-//   (today only phone-scan rows carry a tax id: the base extraction tool does not read it)
+//   (every road reads the issuer's tax id since 2026-11-10; rows stored before that carry none, so for them it does not apply)
 //
 // The vendor's spelling and the document type are NOT part of it. OCR re-spells the same company
 // ("MAX" / "ביג מקס" / "מקס סטוק - אדמירלטי…") and the same file is read once as 'unknown' and once as

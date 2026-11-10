@@ -5,6 +5,7 @@ import { Download, Printer, Loader2, FileSpreadsheet } from 'lucide-react'
 import type { Invoice } from '@/lib/entities'
 import { fileHref } from '@/lib/file-url'
 import { formatCurrency } from '@/lib/format'
+import { CSV_HEADERS, csvRowFor, totalsByCurrency, zipEntries } from '@/lib/export-rows'
 
 interface ExportToolbarProps {
   filteredInvoices: Invoice[]
@@ -16,10 +17,6 @@ const escapeHtml = (v: unknown) =>
   String(v).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
   )
-
-// Excel/Sheets execute cells starting with = + - @ (formula injection). Text
-// fields only — numeric cells must stay raw so negative credit notes parse.
-const csvSafe = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v)
 
 export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarProps) {
   const [isZipping, setIsZipping] = useState(false)
@@ -44,12 +41,7 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
       )
       .join('')
 
-    const totalsByCurrency = new Map<string, number>()
-    for (const inv of filteredInvoices) {
-      const code = (inv.currency || 'ILS').toUpperCase()
-      totalsByCurrency.set(code, (totalsByCurrency.get(code) ?? 0) + (inv.total || 0))
-    }
-    const totalsLabel = [...totalsByCurrency.entries()]
+    const totalsLabel = [...totalsByCurrency(filteredInvoices).entries()]
       .map(([code, sum]) => formatCurrency(sum, code))
       .join(' + ')
 
@@ -85,33 +77,10 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
   const handleCsv = () => {
     if (filteredInvoices.length === 0) return
 
-    const headers = [
-      'תאריך',
-      'ספק',
-      "מס' חשבונית",
-      'תיאור',
-      'מטבע',
-      'לפני מע"מ',
-      'מע"מ',
-      'סה"כ',
-      'תשלום',
-      'קטגוריה',
-    ]
-    const rows = filteredInvoices.map((inv) => [
-      csvSafe(inv.date || ''),
-      csvSafe(inv.vendor || ''),
-      csvSafe(inv.doc_number || ''),
-      csvSafe(inv.description || ''),
-      csvSafe(inv.currency || 'ILS'),
-      inv.pretax ?? '',
-      inv.vat ?? '',
-      inv.total ?? '',
-      csvSafe(inv.payment_method || ''),
-      csvSafe(inv.category || ''),
-    ])
+    const rows = filteredInvoices.map(csvRowFor)
     const csvContent =
       '\uFEFF' +
-      [headers, ...rows]
+      [[...CSV_HEADERS], ...rows]
         .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
         .join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -131,16 +100,7 @@ export default function ExportToolbar({ filteredInvoices = [] }: ExportToolbarPr
 
     setIsZipping(true)
     try {
-      const fileUrls = filteredInvoices
-        .filter((inv) => inv.file_url)
-        .map((inv) => ({
-          url: fileHref(inv.file_url!),
-          // Include doc_type in the fallback so an Invoice and a Receipt sharing a
-          // number don't collide as identical zip entries when file_name is absent.
-          name:
-            inv.file_name ||
-            `${inv.vendor}_${inv.doc_number}${inv.doc_type && inv.doc_type !== 'unknown' ? `_${inv.doc_type}` : ''}.pdf`,
-        }))
+      const fileUrls = zipEntries(filteredInvoices).map(({ fileUrl, name }) => ({ url: fileHref(fileUrl), name }))
 
       const JSZip = (await import('jszip')).default
       const zip = new JSZip()

@@ -33,8 +33,10 @@ interface SavedState {
   currency: string
   needsReview: boolean
   reviewReason: string | null
-  sent: boolean | null // null = not attempted (needs review)
+  sent: boolean | null // null = not attempted (needs review, or an upgrade)
   sendNote: string
+  /** Decision 1: this scan was a tax invoice and the stored receipt of the same transaction took its photo and type. */
+  upgraded: boolean
 }
 
 function blobFromBase64(b64: string, type: string): Blob {
@@ -92,6 +94,8 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
   const [lowSet, setLowSet] = useState<ReadonlySet<keyof ScanValues>>(new Set())
 
   const [duplicate, setDuplicate] = useState<DuplicateInfo | null>(null)
+  // A stored RECEIPT of this transaction that saving this tax invoice will upgrade (Decision 1) — informs, never blocks.
+  const [upgradeOf, setUpgradeOf] = useState<DuplicateInfo | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState<SavedState | null>(null)
@@ -164,11 +168,12 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
     const ctl = new AbortController()
     const timer = setTimeout(async () => {
       try {
-        const q = new URLSearchParams({ doc_number: values.doc_number, date: values.date, total: values.total, vendor_tax_id: values.vendor_tax_id })
+        const q = new URLSearchParams({ doc_number: values.doc_number, date: values.date, total: values.total, vendor_tax_id: values.vendor_tax_id, doc_type: values.doc_type })
         const r = await fetch(`/api/scan/duplicate?${q}`, { credentials: 'include', signal: ctl.signal })
         if (!r.ok) return
-        const data = (await r.json()) as { duplicate?: boolean; existing?: DuplicateInfo | null }
+        const data = (await r.json()) as { duplicate?: boolean; upgrade?: boolean; existing?: DuplicateInfo | null }
         setDuplicate(data.duplicate ? (data.existing ?? null) : null)
+        setUpgradeOf(data.upgrade ? (data.existing ?? null) : null)
       } catch {
         /* the save step checks again */
       }
@@ -177,7 +182,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
       clearTimeout(timer)
       ctl.abort()
     }
-  }, [phase, values.doc_number, values.date, values.total, values.vendor_tax_id])
+  }, [phase, values.doc_number, values.date, values.total, values.vendor_tax_id, values.doc_type])
 
   function patch(p: Partial<ScanValues>) {
     setValues((v) => ({ ...v, ...p }))
@@ -203,6 +208,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
         duplicate?: boolean
         existing?: DuplicateInfo | null
         invoice?: Record<string, unknown>
+        upgraded?: boolean
       }
       if (r.status === 409 && data.duplicate) {
         setDuplicate(data.existing ?? null)
@@ -212,11 +218,14 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
       if (!r.ok || !data.invoice) throw new Error(r.status === 401 ? 'נדרשת התחברות מחדש — רענן את העמוד' : (data.error ?? 'שמירת הקבלה נכשלה'))
 
       const inv = data.invoice
+      const upgraded = data.upgraded === true
       const needsReview = Boolean(inv.needs_review)
       if (values.vendor && passthrough.category) rememberVendorCategory(values.vendor, passthrough.category)
       let sent: boolean | null = null
       let sendNote = ''
-      if (!needsReview) {
+      // An upgrade sends nothing: the accountant already has the receipt of this row, and whether he also gets the tax
+      // invoice is the owner's call (docs/document-identity.md) — the same as the Gmail, upload and folder roads.
+      if (!needsReview && !upgraded) {
         // Same call, same contract as UploadZone: 200 + sent:true = delivered; check `sent`, not res.ok.
         try {
           const sendRes = await fetch('/api/send-to-accountant', {
@@ -248,6 +257,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
         reviewReason: (inv.validation_error as string | null) ?? null,
         sent,
         sendNote,
+        upgraded,
       })
       setPhase('saved')
     } catch (e) {
@@ -379,6 +389,23 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
                 </div>
               )}
 
+              {upgradeOf && !duplicate && (
+                <div role="status" data-testid="scan-upgrade" className="flex items-start gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 p-4 text-sm">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
+                  <div className="min-w-0">
+                    <p className="m-0 font-bold">קבלה על אותה עסקה כבר קיימת — השמירה תשדרג אותה לחשבונית מס.</p>
+                    <p className="m-0 mt-1" style={{ color: 'var(--text2)' }}>
+                      {upgradeOf.vendor} · מס׳ {upgradeOf.doc_number}
+                      {upgradeOf.date ? ` · ${upgradeOf.date}` : ''}
+                      {upgradeOf.total !== null ? ` · ${formatCurrency(upgradeOf.total, upgradeOf.currency)}` : ''}
+                    </p>
+                    <p className="m-0 mt-1 text-[13px]" style={{ color: 'var(--muted-mid)' }}>
+                      הצילום הזה יחליף את קובץ הקבלה ויעדכן את סוג המסמך — לא תיווצר שורה נוספת.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* eslint-disable-next-line @next/next/no-img-element -- a one-off data: URL of the cropped photo; next/image cannot optimise it */}
               <img
                 src={`data:${imageType};base64,${imageB64}`} alt="צילום הקבלה"
@@ -426,12 +453,16 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
             <section className={`${card} flex flex-col gap-3`} style={cardStyle} data-testid="scan-saved">
               <div className="flex items-center gap-2 text-lg font-bold">
                 <Check className="h-5 w-5" style={{ color: 'var(--accent)' }} aria-hidden />
-                הקבלה נשמרה
+                {saved.upgraded ? 'הקבלה הקיימת שודרגה לחשבונית מס' : 'הקבלה נשמרה'}
               </div>
               <p className="m-0 text-sm" style={{ color: 'var(--text2)' }}>
                 {saved.vendor || 'ללא שם ספק'} · מס׳ {saved.docNumber || '—'} · {formatCurrency(saved.total, saved.currency)}
               </p>
-              {saved.needsReview ? (
+              {saved.upgraded ? (
+                <p className="m-0 text-sm" data-testid="scan-upgraded" style={{ color: 'var(--accent)' }}>
+                  הצילום והסוג של הקבלה הקיימת עודכנו — לא נוצרה שורה חדשה ולא נשלח דבר לרואה החשבון.
+                </p>
+              ) : saved.needsReview ? (
                 <p className="m-0 text-sm text-amber-300">
                   סומנה לבדיקה{saved.reviewReason ? `: ${saved.reviewReason}` : ''} — לא נשלחה לרואה החשבון. אפשר לתקן אותה בטבלת החשבוניות.
                 </p>
@@ -442,15 +473,18 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
                   נשמרה, אבל לא נשלחה לרואה החשבון — {sendFailureText(saved.sendNote)}. היא תופיע בטבלה ובבאנר „חשבוניות לא נשלחו” ותישלח משם.
                 </p>
               )}
-              <a
-                href={`/api/scan/${saved.id}/image?download=1`}
-                download
-                className="flex h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium"
-                style={{ borderColor: 'var(--border)', background: 'var(--input-bg)', color: 'var(--text2)' }}
-              >
-                <Download className="h-4 w-4" aria-hidden />
-                הורד
-              </a>
+              {/* The image route serves rows created by a scan only: an upgraded row can be any source. */}
+              {!saved.upgraded && (
+                <a
+                  href={`/api/scan/${saved.id}/image?download=1`}
+                  download
+                  className="flex h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium"
+                  style={{ borderColor: 'var(--border)', background: 'var(--input-bg)', color: 'var(--text2)' }}
+                >
+                  <Download className="h-4 w-4" aria-hidden />
+                  הורד
+                </a>
+              )}
               <Button type="button" onClick={onNext} className="h-12 w-full gap-2 px-4 py-2 text-base font-bold" data-testid="scan-next">
                 {isLast ? 'סיום' : 'לתמונה הבאה'}
               </Button>

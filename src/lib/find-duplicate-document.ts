@@ -9,6 +9,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from './fetch-all-rows'
 import { documentIdentity, isSameDocument, type IdentityInput } from './doc-identity'
+import { isTaxInvoiceType } from './doc-upgrade'
 
 /** What the screens show about the existing row. */
 export interface DuplicateRow {
@@ -26,8 +27,9 @@ export interface DuplicateRow {
 
 const COLUMNS = 'id, vendor, doc_number, doc_type, date, total, currency, source, created_at, vendor_tax_id'
 
-/** The earliest existing row that is the same document as `candidate`, or null (also when `candidate` has no
- *  identity — no number or no total). Throws on a database error: "could not look" is not "no duplicate". */
+/** The existing row that is the same document as `candidate` — the earliest, except that a tax invoice outranks a
+ *  receipt — or null (also when `candidate` has no identity: no number or no total).
+ *  Throws on a database error: "could not look" is not "no duplicate". */
 export async function findDuplicateDocument(
   db: Pick<SupabaseClient, 'from'>,
   candidate: IdentityInput,
@@ -47,10 +49,11 @@ export async function findDuplicateDocument(
     { key: (row) => row.id },
   )
   if (error) throw new Error(`duplicate_lookup_failed:${error.code ?? 'unknown'}`)
-  return (
-    data.find((row) => {
-      const id = documentIdentity(row)
-      return id !== null && isSameDocument(wanted, id)
-    }) ?? null
-  )
+  const matches = data.filter((row) => {
+    const id = documentIdentity(row)
+    return id !== null && isSameDocument(wanted, id)
+  })
+  // When the table already holds a tax invoice of this document, THAT is the existing document — never an earlier
+  // receipt of it: otherwise a new tax invoice would "upgrade" the receipt and leave two tax invoices (src/lib/doc-upgrade.ts).
+  return matches.find((row) => isTaxInvoiceType(row.doc_type)) ?? matches[0] ?? null
 }

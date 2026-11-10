@@ -12,6 +12,10 @@
 //   6. the image route serves only rows with source = 'scan' (it must not become a generic file proxy);
 //   7. the scan UI is ONLY the upload zone on the home page: no /scan page, no link or router.push to it,
 //      and the zone splits PDFs (the old queue) from photos (the scan overlay).
+//   8. one definition of "the same document" (src/lib/doc-identity.ts) at every road into the table;
+//   9. the owner's decisions of 2026-11-10 stay wired in: a tax invoice upgrades a stored receipt (docs/document-identity.md),
+//      the folder scan deletes a duplicate's source file only after the existing row is confirmed, the issuer's tax id
+//      is read by the base extraction, and a credit note is made negative BEFORE the VAT fallback.
 // The behaviour behind each of these is proved with fakes in tests/scan-save.test.ts (pnpm test);
 // this check is the cheap guard that runs in CI without node_modules.
 import { run, repoRoot, fail, ok } from './_lib.mjs'
@@ -92,6 +96,53 @@ run('check-scan-pipeline', async () => {
   need(/\bfindDuplicateInList\(/.test(zone) && /\bfindDuplicateInList\(/.test(read('src/lib/folder-watch.ts')), 'אזור ההעלאה וסריקת התיקייה: findDuplicateInList',
     'UploadZone ו-folder-watch חייבים להשתמש ב-findDuplicateInList ולא בהשוואת ספק/סוג משלהם')
   need(/OWN_SEND_HEADER/.test(read('src/lib/accountant-send.ts')), 'מייל הרו"ח נושא כותרת סימון', 'accountant-send חייב להוסיף את OWN_SEND_HEADER')
+
+  // 9 — the decisions of 2026-11-10
+  const before = (src, a, b) => src.indexOf(a) !== -1 && src.indexOf(b) !== -1 && src.indexOf(a) < src.indexOf(b)
+  const folder = read('src/lib/folder-watch.ts')
+  const extractRoute = read('src/app/api/extract-invoice/route.ts')
+  const invoiceWrite = read('src/lib/invoice-write.ts')
+  const prompt = read('src/lib/invoice-extraction-prompt.ts')
+
+  // Decision 1 — a tax invoice over a stored receipt upgrades that row, on every road that can meet it
+  need(/\bduplicateAction\(/.test(gmail) && /\bupgradeReceiptToTaxInvoice\(/.test(gmail) && /\bduplicateAction\(/.test(invoices) && /\bupgradeReceiptToTaxInvoice\(/.test(invoices),
+    'Gmail ו-POST /api/invoices: שדרוג קבלה לחשבונית מס (duplicateAction + upgradeReceiptToTaxInvoice)',
+    'scan-gmail ו-POST /api/invoices חייבים לשדרג קבלה קיימת כשנכנסת חשבונית מס על אותה עסקה — לא ליצור שורה שנייה ולא לדלג')
+  need(/\bduplicateAction\(/.test(save) && /\bstore\.upgradeInvoice\(/.test(save), 'הסריקה מהטלפון: שדרוג קבלה לחשבונית מס', 'save.ts חייב לשדרג קבלה קיימת (duplicateAction + store.upgradeInvoice) כשהסריקה היא חשבונית מס')
+  need(/\bduplicateAction\(/.test(zone) && /\bduplicateAction\(/.test(folder), 'אזור ההעלאה וסריקת התיקייה: חשבונית מס מעל קבלה לא נדלגת בצד הדפדפן',
+    'UploadZone ו-folder-watch חייבים לשאול duplicateAction לפני שהם מדלגים על קובץ — אחרת חשבונית מס מעל קבלה לא תגיע לשרת לשדרוג')
+  // (the first removal of the uploaded object after the duplicate lookup must come AFTER the upgrade attempt: after an
+  // upgrade that object is the stored row's file)
+  const afterLookup = gmail.slice(gmail.indexOf('findDuplicateDocument(supabase,'))
+  need(afterLookup.indexOf('upgradeReceiptToTaxInvoice(') !== -1 && afterLookup.indexOf('upgradeReceiptToTaxInvoice(') < afterLookup.indexOf('removeUploadedObject()'),
+    'Gmail: השדרוג לפני מחיקת הקובץ שהועלה', 'scan-gmail: הקובץ שהועלה נמחק לפני שנבדק השדרוג — אחרי שדרוג הוא קובץ השורה הקיימת')
+
+  // (after a successful upgrade — and after a database error that leaves the outcome unknown — the uploaded object may be the
+  // row's file: rowCreated = true keeps the catch below from removing it)
+  const upgradeBlock = afterLookup.slice(afterLookup.indexOf('upgradeReceiptToTaxInvoice('), afterLookup.indexOf('removeUploadedObject()'))
+  need((upgradeBlock.match(/rowCreated = true/g) ?? []).length === 2 && /reason === 'db_error'[\s\S]{0,800}status: 'error'/.test(upgradeBlock),
+    'Gmail: אחרי שדרוג (או כשל DB לא חד-משמעי) האובייקט שהועלה נשמר',
+    'scan-gmail: שדרוג שהצליח, וכשל DB בשדרוג, חייבים לסמן rowCreated = true (האובייקט עשוי להיות קובץ השורה) ולהחזיר error ולא duplicate')
+
+  // the phone-scan screen sends nothing to the accountant after an upgrade (the row is an existing, already-sent receipt)
+  need(/data\.upgraded === true/.test(read('src/components/scan/ScanStep.tsx')) && /!needsReview && !upgraded/.test(read('src/components/scan/ScanStep.tsx')),
+    'מסך הסריקה מהטלפון: אחרי שדרוג לא נשלח דבר לרו"ח', 'ScanStep חייב לדלג על /api/send-to-accountant כשהתשובה היא upgraded (השורה היא קבלה קיימת שכבר נשלחה)')
+
+  // Decision 2 — a duplicate's source file leaves the folder only after the existing row and its file are confirmed
+  const calls = folder.split('removeSourceFile(dirHandle, name)').length - 1
+  need(calls === 2 && before(folder, 'async function removeConfirmedDuplicate(', 'verifyExistingDocument(existingId)') && before(folder, 'verifyExistingDocument(existingId)', 'const removed = await removeSourceFile(dirHandle, name)'),
+    'סריקת תיקייה: קובץ כפול נמחק רק דרך removeConfirmedDuplicate (אימות לפני מחיקה)',
+    'folder-watch: כל מחיקת קובץ מקור של כפילות חייבת לעבור דרך removeConfirmedDuplicate (verifyExistingDocument לפני removeSourceFile)')
+  need(/\bduplicate\b[\s\S]{0,200}removeConfirmedDuplicate\(dirHandle, name, created\.existing_id/.test(folder) && /removeConfirmedDuplicate\(dirHandle, name, match\.id/.test(folder),
+    'סריקת תיקייה: שני מסלולי הכפילות (בדיקה מקדימה, תשובת שרת) מאמתים לפני מחיקה', 'folder-watch: גם כפילות מהבדיקה המקדימה וגם כפילות שהשרת דיווח עליה חייבות לעבור אימות לפני מחיקת הקובץ')
+
+  // Decision 4 — the issuer's tax id is read by the base extraction (so every path has it)
+  need(/vendor_tax_id:\s*\{\s*type:\s*'string'\s*\}/.test(prompt.slice(0, prompt.indexOf('SCAN_CONFIDENCE_FIELDS'))), 'כלי החילוץ הבסיסי קורא vendor_tax_id', 'EXTRACTION_TOOL חייב לכלול vendor_tax_id — אחרת כלל ח.פ. חל רק על שורות מהסריקה מהטלפון')
+  need(/vendor_tax_id/.test(invoices) && /normalizeTaxId\(/.test(gmail) && /normalizeTaxId\(/.test(extractRoute), 'ח.פ. נשמר ומנורמל בהעלאה, בתיקייה וב-Gmail', 'POST /api/invoices, extract-invoice ו-scan-gmail חייבים לשמור ולנרמל vendor_tax_id')
+
+  // Decision 5 — a credit note is negative, before the VAT fallback derives from the total
+  need(before(invoiceWrite, 'applyCreditNoteSign(payload)', 'deriveVatFromTotal({') && before(gmail, 'applyCreditNoteSign(extracted)', 'deriveVatFromTotal({') && before(extractRoute, 'applyCreditNoteSign(data)', 'deriveVatFromTotal({'),
+    'זיכוי נהפך לשלילי לפני גזירת המע"מ (finalize, Gmail, extract-invoice)', 'applyCreditNoteSign חייב לרוץ לפני deriveVatFromTotal ב-finalizeInvoicePayload, ב-scan-gmail וב-extract-invoice')
 
   if (bad === 0) ok('סריקה נכנסת לאותו צינור, עם בדיקת הכפילות')
 })

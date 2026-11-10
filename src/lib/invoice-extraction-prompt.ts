@@ -98,6 +98,12 @@ Some invoices show several totals (line subtotals, periodic subtotals, grand tot
 - The one labeled "כולל מע"מ" is the gross total (this is what goes in the "total" field).
 - If you see a "ערך מצטבר" or "סה"כ מצטבר" — IGNORE it; that's a running balance.
 
+## VENDOR TAX ID — מספר עוסק / ח.פ.
+"vendor_tax_id": the ISSUER's (seller's) company / dealer number — ח.פ / ע.מ / עוסק מורשה / VAT ID — digits only.
+- It is the SELLER's number. NOT the customer's (next to "לכבוד" / "Bill To"), NOT a phone number, and NOT a
+  document / contract / customer / account number.
+- Return "" when it is not printed, or when you cannot read EVERY digit. Never guess a digit.
+
 ## INVOICE NUMBER
 Look for: מספר חשבונית / חשבונית מס מספר / Invoice # / מס' קבלה / doc number in header
 
@@ -113,7 +119,9 @@ apart. Return one of these exact codes in "doc_type":
 - "receipt"          — קבלה / Receipt
 - "invoice_receipt"  — חשבונית מס קבלה / חשבונית מס-קבלה / Tax Invoice-Receipt (a single
                        document that is BOTH — very common in Israel)
-- "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note (usually a negative/refund total)
+- "credit_note"      — חשבונית זיכוי / זיכוי / Credit Note. A credit note REDUCES what is owed, so return
+                       "pretax", "vat" and "total" as NEGATIVE numbers (e.g. total -1652.00) even when the
+                       document prints them without a minus sign.
 - "other"            — NOT a billing document at all: proforma / חשבון עסקה, הצעת מחיר /
                        quote, תעודת משלוח / delivery note, הזמנת רכש / purchase order,
                        חוזה / הסכם / contract, מכתב / letter, פרוטוקול / protocol,
@@ -133,12 +141,13 @@ Return ONLY this JSON:
   "date": "DD/MM/YYYY (issue date, NOT billing period)",
   "vendor": "exact vendor name as printed (issuer, NOT customer)",
   "doc_number": "invoice/receipt number",
+  "vendor_tax_id": "issuer's ח.פ / ע.מ digits only, or \"\" when not printed",
   "doc_type": "one of: invoice, receipt, invoice_receipt, credit_note, other, unknown",
   "description": "short Hebrew description of what was purchased/charged",
   "currency": "ISO 4217 code: ILS, USD, EUR, GBP, ... — matches the symbol on the invoice",
-  "pretax": number (before VAT, in the SAME currency as 'currency'),
-  "vat": number (VAT amount, 0 if exempt, same currency),
-  "total": number (total with VAT, same currency),
+  "pretax": number (before VAT, in the SAME currency as 'currency'; negative for a credit note),
+  "vat": number (VAT amount, 0 if exempt, same currency; negative for a credit note),
+  "total": number (total with VAT, same currency; negative for a credit note),
   "payment_method": "אשראי / העברה בנקאית / מזומן / אחר (if visible)",
   "category": "one of: תוכנה, ענן, חשמל, ציוד משרדי, שירותים, תקשורת, ביטוח, שכירות, משלוח, שיווק, הדרכה, תחזוקה, נסיעות, אירוח, אחר"
 }
@@ -163,6 +172,7 @@ export const EXTRACTION_TOOL = {
       date: { type: 'string' },
       vendor: { type: 'string' },
       doc_number: { type: 'string' },
+      vendor_tax_id: { type: 'string' },
       doc_type: {
         type: 'string',
         enum: ['invoice', 'receipt', 'invoice_receipt', 'credit_note', 'other', 'unknown'],
@@ -181,9 +191,9 @@ export const EXTRACTION_TOOL = {
 
 // ── Receipt scan (a paper receipt photographed on the phone) ───────────────────
 // The SAME extraction call, prompt and model as above — the scan route only ADDS to the
-// tool's schema (the issuer's tax id and a 0–1 confidence per field, both optional, so a
-// reply without them is still valid) and appends one paragraph to the prompt. The Gmail
-// and manual-upload paths keep using EXTRACTION_TOOL / INVOICE_EXTRACTION_PROMPT untouched.
+// tool's schema (a 0–1 confidence per field, optional, so a reply without it is still valid)
+// and appends one paragraph to the prompt. The issuer's tax id is read by every path now. The Gmail
+// and manual-upload paths keep using EXTRACTION_TOOL / INVOICE_EXTRACTION_PROMPT untouched (no confidence).
 export const SCAN_CONFIDENCE_FIELDS = [
   'doc_type', 'vendor', 'vendor_tax_id', 'doc_number', 'date', 'pretax', 'vat', 'total', 'currency', 'payment_method',
 ] as const
@@ -193,8 +203,6 @@ export const SCAN_EXTRACTION_PROMPT_ADDENDUM = `
 ## PHOTOGRAPHED PAPER RECEIPT
 This image is a PHONE PHOTO of a paper receipt or invoice (it may be a long, narrow supermarket
 receipt, crumpled, tilted, or a faded thermal print). Read it exactly as above.
-- "vendor_tax_id": the ISSUER's company / dealer number (ח.פ / ע.מ / עוסק מורשה / VAT ID), digits only.
-  Return "" when it is not printed. It is NOT the customer's number and NOT a phone number.
 - "confidence": an object with a number from 0 to 1 for EACH of these keys:
   doc_type, vendor, vendor_tax_id, doc_number, date, pretax, vat, total, currency, payment_method.
   1 = every character is clearly legible; below 0.7 = you are unsure of at least one character.
@@ -212,7 +220,6 @@ export const SCAN_EXTRACTION_TOOL = {
     ...EXTRACTION_TOOL.input_schema,
     properties: {
       ...EXTRACTION_TOOL.input_schema.properties,
-      vendor_tax_id: { type: 'string' },
       confidence: SCAN_CONFIDENCE_SCHEMA,
     },
   },

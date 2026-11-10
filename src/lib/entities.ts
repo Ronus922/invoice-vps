@@ -32,6 +32,13 @@ export interface Invoice {
   vendor_tax_id?: string | null
 }
 
+/** What POST /api/invoices answers (200) instead of a row when the document is already stored. */
+export interface DuplicateResult {
+  duplicate: true
+  existing_id?: string
+  upgraded?: boolean
+}
+
 export interface ExtractionRaw {
   model: string
   raw_text: string
@@ -59,14 +66,16 @@ export const InvoiceEntity = {
   // When the server finds the same document already stored (src/lib/doc-identity.ts) — or the (vendor,
   // doc_number, doc_type) unique index rejects the row — it returns { duplicate: true } (200) instead of a row:
   // the write-time dedup. Callers must check for it before treating as created.
-  async create(record: Partial<Invoice>): Promise<Invoice | { duplicate: true }> {
+  // `existing_id` names the row it duplicates (absent when the server could not tell); `upgraded` means that row was a
+  // receipt and took this tax invoice's file and type (src/lib/doc-upgrade.ts).
+  async create(record: Partial<Invoice>): Promise<Invoice | DuplicateResult> {
     const res = await fetch('/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
     })
     if (!res.ok) throw new Error(await readError(res, 'יצירת חשבונית נכשלה'))
-    return (await res.json()) as Invoice | { duplicate: true }
+    return (await res.json()) as Invoice | DuplicateResult
   },
 
   async update(id: string, updates: Partial<Invoice>) {

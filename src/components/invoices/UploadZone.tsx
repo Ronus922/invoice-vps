@@ -19,6 +19,7 @@ import {
 } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
 import { findDuplicateInList } from '@/lib/doc-identity'
+import { duplicateAction } from '@/lib/doc-upgrade'
 import { splitUploads } from '@/lib/scan/files'
 import ScanOverlay from '@/components/scan/ScanOverlay'
 
@@ -99,7 +100,9 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           // Fast pre-check on the document's identity (src/lib/doc-identity.ts: normalised doc_number + date + total,
           // + tax id when both sides have one — not the vendor's spelling, not the doc type). The server
           // (POST /api/invoices) checks again and is the real guard; this avoids a needless round-trip.
-          const isDuplicate = findDuplicateInList(existingRef.current, extracted) !== null
+          // Decision 1: a tax invoice over a stored RECEIPT is not a duplicate — the server upgrades that row.
+          const match = findDuplicateInList(existingRef.current, extracted)
+          const isDuplicate = match !== null && duplicateAction(match.doc_type, docType) === 'skip'
           if (isDuplicate) {
             setQueue((prev) =>
               prev.map((q) =>
@@ -118,6 +121,19 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             file_name: item.file.name,
             source: 'manual',
           })
+
+          if (created && 'duplicate' in created && created.upgraded) {
+            // The stored receipt of this transaction took this tax invoice's file and type (src/lib/doc-upgrade.ts).
+            onInvoiceExtracted()
+            setQueue((prev) =>
+              prev.map((q) =>
+                q === item || (q.name === item.name && q.status === 'processing')
+                  ? { ...q, status: 'done', message: 'הקבלה הקיימת שודרגה לחשבונית מס' }
+                  : q
+              )
+            )
+            continue
+          }
 
           if (created && 'duplicate' in created) {
             // The server's dedup caught a duplicate the snapshot missed.
