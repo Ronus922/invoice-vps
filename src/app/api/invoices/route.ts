@@ -312,6 +312,12 @@ export async function PATCH(request: NextRequest) {
     .single()
 
   if (error) {
+    // The unique index on the document identity (supabase/migrations/20261110_add_document_identity_index.sql): the
+    // edit would make this row the same document as another one (same number, date and total).
+    if (error.code === '23505') {
+      console.warn('[invoices PATCH] edit refused: it would duplicate another document', id)
+      return NextResponse.json({ error: 'קיים כבר מסמך אחר עם אותו מספר, תאריך וסכום — לא נשמר' }, { status: 409 })
+    }
     console.error('[invoices PATCH] supabase error:', error)
     return NextResponse.json({ error: 'עדכון נכשל' }, { status: 500 })
   }
