@@ -13,6 +13,8 @@ export interface RecordedCall {
   from: number
   to: number | null
   orders: string[]
+  /** `.eq()` filters as `column=value`. Recorded only — the fake does not filter, the test feeds it matching rows. */
+  filters: string[]
 }
 
 interface Result {
@@ -39,6 +41,7 @@ export const fake = {
 
 class Query implements PromiseLike<Result> {
   private orders: Array<{ field: string; asc: boolean }> = []
+  private filters: string[] = []
   private window: { from: number; to: number } | null = null
 
   constructor(private readonly table: string) {}
@@ -46,7 +49,10 @@ class Query implements PromiseLike<Result> {
   select() { return this }
   not() { return this }
   is() { return this }
-  eq() { return this }
+  eq(field: string, value: unknown) {
+    this.filters.push(`${field}=${String(value)}`)
+    return this
+  }
 
   order(field: string, options?: { ascending?: boolean }) {
     this.orders.push({ field, asc: options?.ascending !== false })
@@ -68,7 +74,7 @@ class Query implements PromiseLike<Result> {
   private run(): Result {
     fake.requests += 1
     const n = fake.requests
-    fake.calls.push({ table: this.table, from: this.window?.from ?? 0, to: this.window?.to ?? null, orders: this.orders.map((o) => o.field) })
+    fake.calls.push({ table: this.table, from: this.window?.from ?? 0, to: this.window?.to ?? null, orders: this.orders.map((o) => o.field), filters: this.filters })
     if (fake.failOnRequest === n) return { data: null, error: { message: 'boom', code: 'XX000' } }
 
     const stored = fake.tables.get(this.table) ?? []
