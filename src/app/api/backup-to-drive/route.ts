@@ -5,6 +5,7 @@ import { getGmailAccessToken } from '@/lib/gmail'
 import { resolveFileUrl } from '@/lib/storage'
 import { ensureFolder, findFileInFolder, uploadFile, moveFile, monthFolderName, fileExists } from '@/lib/drive'
 import { safeEqual } from '@/lib/safe-compare'
+import { fetchAllRows } from '@/lib/fetch-all-rows'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,6 +28,8 @@ interface InvoiceRow {
   backed_up_to_drive_at: string | null
   drive_file_id: string | null
 }
+
+const INVOICE_COLUMNS = 'id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id'
 
 interface ProgressSnapshot {
   phase: 'init' | 'reorganizing' | 'uploading' | 'done'
@@ -181,11 +184,18 @@ export async function POST(request: NextRequest) {
     // on a normal run new uploads already land in the right year/month folder,
     // so the sweep would only delay backing up the new invoices.
     if (force) {
-      const { data: backedRows, error: backedError } = await supabase
-        .from('invoices')
-        .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
-        .not('drive_file_id', 'is', null)
-        .order('created_at', { ascending: true })
+      // fetchAllRows: a plain select stops silently at PostgREST's max-rows (1000), and 1056 rows are backed up.
+      const { data: backedRows, error: backedError } = await fetchAllRows<InvoiceRow>(
+        (from, to) =>
+          supabase
+            .from('invoices')
+            .select(INVOICE_COLUMNS)
+            .not('drive_file_id', 'is', null)
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { key: (row) => row.id },
+      )
 
       if (backedError) throw new Error(`DB select failed: ${backedError.message}`)
 
@@ -226,17 +236,20 @@ export async function POST(request: NextRequest) {
 
     // Pass 2 — upload pending invoices (backed_up_to_drive_at IS NULL),
     // newest first so the invoices just uploaded reach Drive immediately.
-    const query = supabase
-      .from('invoices')
-      .select('id,vendor,doc_number,doc_type,file_url,file_name,created_at,backed_up_to_drive_at,drive_file_id')
-      .not('file_url', 'is', null)
-      .order('created_at', { ascending: false })
-
-    if (!force) {
-      query.is('backed_up_to_drive_at', null)
-    }
-
-    const { data: rows, error: selectError } = await query
+    // Every matching row, not just the first 1000 (see fetchAllRows). In force mode that is every invoice
+    // with a file; otherwise only the ones still waiting for Drive.
+    const { data: rows, error: selectError } = await fetchAllRows<InvoiceRow>(
+      (from, to) => {
+        const query = supabase
+          .from('invoices')
+          .select(INVOICE_COLUMNS)
+          .not('file_url', 'is', null)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+        return (force ? query : query.is('backed_up_to_drive_at', null)).range(from, to)
+      },
+      { key: (row) => row.id },
+    )
     if (selectError) throw new Error(`DB select failed: ${selectError.message}`)
 
     const invoices: InvoiceRow[] = (rows as InvoiceRow[] | null) ?? []
