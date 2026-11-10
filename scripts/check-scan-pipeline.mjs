@@ -83,5 +83,15 @@ run('check-scan-pipeline', async () => {
     'UploadZone חייב לפצל קבצים (splitUploads) ולפתוח את ScanOverlay לתמונות — אחרת תמונה חוזרת לצינור הישיר בלי חיתוך')
   need(/accept="application\/pdf,image\/\*"/.test(zone), 'ה-input של אזור ההעלאה מקבל PDF ותמונות', 'ה-input של אזור ההעלאה חייב להיות accept="application/pdf,image/*"')
 
+  // 8 — one definition of "the same document" (src/lib/doc-identity.ts) at every road into the table
+  const gmail = read('src/app/api/scan-gmail/route.ts')
+  need(/\bfindDuplicateDocument\(supabase,/.test(gmail) && /\bownSendReason\(/.test(gmail), 'Gmail: זהות מסמך + דילוג על מיילי שליחה עצמית',
+    'scan-gmail חייב להשתמש ב-findDuplicateDocument וב-ownSendReason (אחרת מיילי השליחה לרו"ח נקראים חזרה כחשבוניות חדשות)')
+  need(/\bfindDuplicateDocument\(supabase, payload\)/.test(invoices), 'POST /api/invoices: זהות מסמך', 'POST /api/invoices חייב לבדוק זהות מסמך (findDuplicateDocument) לפני ההכנסה')
+  need(/\bfindDuplicateDocument\(db,/.test(store), 'store.ts: זהות מסמך', 'store.ts חייב לחפש כפילות לפי זהות המסמך (findDuplicateDocument)')
+  need(/\bfindDuplicateInList\(/.test(zone) && /\bfindDuplicateInList\(/.test(read('src/lib/folder-watch.ts')), 'אזור ההעלאה וסריקת התיקייה: findDuplicateInList',
+    'UploadZone ו-folder-watch חייבים להשתמש ב-findDuplicateInList ולא בהשוואת ספק/סוג משלהם')
+  need(/OWN_SEND_HEADER/.test(read('src/lib/accountant-send.ts')), 'מייל הרו"ח נושא כותרת סימון', 'accountant-send חייב להוסיף את OWN_SEND_HEADER')
+
   if (bad === 0) ok('סריקה נכנסת לאותו צינור, עם בדיקת הכפילות')
 })

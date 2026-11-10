@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { fetchWithRetry } from '@/lib/http-retry'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -57,6 +58,25 @@ export async function getGmailAccessToken(): Promise<string> {
     .eq('id', 'default')
 
   return data.access_token
+}
+
+/** The connected Gmail account's own address (users.getProfile), lower-cased; null when it cannot be read —
+ *  the callers then rely on the other signs (src/lib/own-send.ts). */
+export async function getGmailOwnAddress(accessToken: string): Promise<string | null> {
+  try {
+    const res = await fetchWithRetry('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+    if (!res.ok) {
+      console.warn('[gmail] could not read the account address (HTTP %d) — the own-mail address rule is off for this scan', res.status)
+      return null
+    }
+    const data = (await res.json()) as { emailAddress?: unknown }
+    return typeof data.emailAddress === 'string' && data.emailAddress ? data.emailAddress.toLowerCase() : null
+  } catch (err) {
+    console.warn('[gmail] could not read the account address — the own-mail address rule is off for this scan:', err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 export async function getAccountantEmail(): Promise<string | null> {

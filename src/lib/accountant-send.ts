@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { getGmailAccessToken, getAccountantEmail } from '@/lib/gmail'
 import { resolveFileUrl } from '@/lib/storage'
+import { OWN_SEND_HEADER, OWN_SEND_HEADER_VALUE } from '@/lib/own-send'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -37,7 +38,7 @@ export interface SendResult {
   error?: string
 }
 
-function buildMimeMessage(params: {
+export function buildMimeMessage(params: {
   to: string
   subject: string
   bodyText: string
@@ -50,6 +51,9 @@ function buildMimeMessage(params: {
 
   const lines = [
     `MIME-Version: 1.0`,
+    // Marks the mail as the app's own accountant send, so the Gmail scan never reads it back as a new
+    // invoice (src/lib/own-send.ts). Gmail keeps custom X- headers on the sent message.
+    `${OWN_SEND_HEADER}: ${OWN_SEND_HEADER_VALUE}`,
     `To: ${params.to}`,
     `Subject: ${encodedSubject}`,
     `Content-Type: multipart/mixed; boundary="${boundary}"`,

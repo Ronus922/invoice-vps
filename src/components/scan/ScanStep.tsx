@@ -164,7 +164,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
     const ctl = new AbortController()
     const timer = setTimeout(async () => {
       try {
-        const q = new URLSearchParams({ vendor: values.vendor, doc_number: values.doc_number, doc_type: values.doc_type })
+        const q = new URLSearchParams({ doc_number: values.doc_number, date: values.date, total: values.total, vendor_tax_id: values.vendor_tax_id })
         const r = await fetch(`/api/scan/duplicate?${q}`, { credentials: 'include', signal: ctl.signal })
         if (!r.ok) return
         const data = (await r.json()) as { duplicate?: boolean; existing?: DuplicateInfo | null }
@@ -177,7 +177,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
       clearTimeout(timer)
       ctl.abort()
     }
-  }, [phase, values.vendor, values.doc_number, values.doc_type])
+  }, [phase, values.doc_number, values.date, values.total, values.vendor_tax_id])
 
   function patch(p: Partial<ScanValues>) {
     setValues((v) => ({ ...v, ...p }))

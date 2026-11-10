@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
-import { getGmailAccessToken } from '@/lib/gmail'
+import { getGmailAccessToken, getGmailOwnAddress, getAccountantEmail } from '@/lib/gmail'
 import { parseExtractedJson } from '@/lib/ai-json-parse'
 import { normalizeVendorName } from '@/lib/vendor-utils'
 import { getAuthenticatedUser, unauthorizedResponse } from '@/lib/auth-helpers'
@@ -21,6 +21,10 @@ import { coerceRequiredIdentityFields } from '@/lib/invoice-write'
 import { v4 as uuidv4 } from 'uuid'
 import { safeEqual } from '@/lib/safe-compare'
 import { fetchAllRows } from '@/lib/fetch-all-rows'
+import { findDuplicateDocument } from '@/lib/find-duplicate-document'
+import { documentIdentity, identityKey } from '@/lib/doc-identity'
+import { withKeyLock } from '@/lib/key-lock'
+import { ownSendReason } from '@/lib/own-send'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -188,6 +192,7 @@ interface ExtractedInvoice {
   total?: number
   payment_method?: string
   category?: string
+  vendor_tax_id?: string
 }
 
 function escapeRegExp(s: string): string {
@@ -456,83 +461,97 @@ async function processAttachment(
       total: extracted.total ?? null,
     })
 
-    if (extracted.doc_number) {
-      // Dedup on the full identity key (vendor, doc_number, doc_type): an Invoice
-      // and a Receipt sharing one number are DIFFERENT documents and must both be
-      // allowed. Re-scans of the same document get the same doc_type ⇒ deduped.
-      const duplicateQuery = supabase
-        .from('invoices')
-        .select('id')
-        .eq('doc_number', String(extracted.doc_number))
-        .eq('doc_type', extracted.doc_type)
-        .limit(1)
+    // Dedup on the document's identity (src/lib/doc-identity.ts): normalised doc_number + date + total, and the
+    // vendor's tax id when both sides have one. The vendor's spelling and the doc_type are NOT part of it — the
+    // same file came back as "MAX" and "ביג מקס", as 'unknown' and as 'invoice_receipt'. The unique index on
+    // (vendor, doc_number, doc_type) at the insert below stays as the race-proof net; a failed lookup does not
+    // block the insert (that is what the index is for).
+    // Lookup + insert are one step per document: serialised by the identity key, so two copies of one document in the
+    // same batch cannot both pass the lookup before either is stored (src/lib/key-lock.ts).
+    const identity = documentIdentity({
+      doc_number: extracted.doc_number,
+      date: extracted.date,
+      total: extracted.total,
+      vendor_tax_id: extracted.vendor_tax_id,
+    })
+    const claimed = await withKeyLock(
+      identity ? identityKey(identity) : null,
+      async (): Promise<ProcessResult | { insertedId: string; insertPayload: Record<string, unknown> }> => {
+        try {
+          const existing = await findDuplicateDocument(supabase, {
+            doc_number: extracted.doc_number,
+            date: extracted.date,
+            total: extracted.total,
+            vendor_tax_id: extracted.vendor_tax_id,
+          })
+          if (existing) {
+            await removeUploadedObject()
+            return { status: 'duplicate', filename, vendor: extracted.vendor }
+          }
+        } catch (err) {
+          console.error('[scan-gmail] duplicate lookup failed, relying on the unique index:', err instanceof Error ? err.message : err)
+        }
 
-      if (vendor) {
-        duplicateQuery.eq('vendor', vendor)
-      }
+        const insertPayload: Record<string, unknown> = {
+          ...extracted,
+          file_url,
+          file_name: filename || `invoice_${Date.now()}.pdf`,
+          source: 'gmail',
+          created_by: createdBy,
+          needs_review: !validation.ok,
+          vat_derived: derivation.vatDerived,
+          validation_error: validation.reason,
+          extraction_raw: {
+            model: INVOICE_EXTRACTION_MODEL,
+            raw_text: text,
+            parsed: extracted,
+            validation_error: validation.reason,
+            scanned_at: new Date().toISOString(),
+            source: 'gmail',
+            ...(derivation.vatDerived
+              ? {
+                  vat_derivation: {
+                    rate: derivation.rate,
+                    derived_at: new Date().toISOString(),
+                    original: { pretax: extractedPretax, vat: extractedVat },
+                  },
+                }
+              : {}),
+          },
+        }
+        // DB has NOT NULL on vendor/doc_number — coerce to '' + needs_review
+        // instead of losing the invoice on an insert failure.
+        coerceRequiredIdentityFields(insertPayload)
 
-      const { data: existing } = await duplicateQuery
+        // DB has NOT NULL on total. Mirror /api/invoices POST: a failed extraction
+        // (total=null) still saves the file, flagged by the total=0 validator —
+        // otherwise the insert 23502s and the message retries (and re-bills) on
+        // every scan forever.
+        if (insertPayload.total == null) insertPayload.total = 0
 
-      if (existing && existing.length > 0) {
-        await removeUploadedObject()
-        return { status: 'duplicate', filename, vendor: extracted.vendor }
-      }
-    }
+        const { data: inserted, error: insertError } = await supabase
+          .from('invoices')
+          .insert(insertPayload)
+          .select('id')
+          .single()
 
-    const insertPayload: Record<string, unknown> = {
-      ...extracted,
-      file_url,
-      file_name: filename || `invoice_${Date.now()}.pdf`,
-      source: 'gmail',
-      created_by: createdBy,
-      needs_review: !validation.ok,
-      vat_derived: derivation.vatDerived,
-      validation_error: validation.reason,
-      extraction_raw: {
-        model: INVOICE_EXTRACTION_MODEL,
-        raw_text: text,
-        parsed: extracted,
-        validation_error: validation.reason,
-        scanned_at: new Date().toISOString(),
-        source: 'gmail',
-        ...(derivation.vatDerived
-          ? {
-              vat_derivation: {
-                rate: derivation.rate,
-                derived_at: new Date().toISOString(),
-                original: { pretax: extractedPretax, vat: extractedVat },
-              },
-            }
-          : {}),
+        if (insertError) {
+          // Unique index (vendor, doc_number, doc_type) — same document re-scanned.
+          if (insertError.code === '23505') {
+            await removeUploadedObject()
+            return { status: 'duplicate', filename, vendor: extracted.vendor }
+          }
+          console.error('[scan-gmail] insert failed:', insertError, 'file:', filename)
+          await removeUploadedObject()
+          return { status: 'error', filename }
+        }
+        rowCreated = true
+        return { insertedId: inserted.id, insertPayload }
       },
-    }
-    // DB has NOT NULL on vendor/doc_number — coerce to '' + needs_review
-    // instead of losing the invoice on an insert failure.
-    coerceRequiredIdentityFields(insertPayload)
-
-    // DB has NOT NULL on total. Mirror /api/invoices POST: a failed extraction
-    // (total=null) still saves the file, flagged by the total=0 validator —
-    // otherwise the insert 23502s and the message retries (and re-bills) on
-    // every scan forever.
-    if (insertPayload.total == null) insertPayload.total = 0
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('invoices')
-      .insert(insertPayload)
-      .select('id')
-      .single()
-
-    if (insertError) {
-      // Unique index (vendor, doc_number, doc_type) — same document re-scanned.
-      if (insertError.code === '23505') {
-        await removeUploadedObject()
-        return { status: 'duplicate', filename, vendor: extracted.vendor }
-      }
-      console.error('[scan-gmail] insert failed:', insertError, 'file:', filename)
-      await removeUploadedObject()
-      return { status: 'error', filename }
-    }
-    rowCreated = true
+    )
+    if ('status' in claimed) return claimed
+    const inserted = { id: claimed.insertedId }
+    const insertPayload = claimed.insertPayload
 
     if (vendor && extracted.category) {
       vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
@@ -615,20 +634,25 @@ async function recordScannedEmail(
   attachmentNames: string[],
   invoicesFound: number,
   scanStatus: 'scanned' | 'no_attachments' | 'error',
-  skippedAttachments: SkippedAttachment[] = []
+  skippedAttachments: SkippedAttachment[] = [],
+  /** Keep an earlier record of the same message untouched (it may say which rows the message created). */
+  keepExisting = false
 ) {
-  await supabase.from('scanned_emails').upsert({
-    email_id: emailId,
-    email_date: emailDate,
-    sender,
-    subject,
-    attachment_names: attachmentNames,
-    invoices_found: invoicesFound,
-    scan_status: scanStatus,
-    scanned_at: new Date().toISOString(),
-    skipped_attachments: skippedAttachments,
-    filter_version: FILTER_VERSION,
-  })
+  await supabase.from('scanned_emails').upsert(
+    {
+      email_id: emailId,
+      email_date: emailDate,
+      sender,
+      subject,
+      attachment_names: attachmentNames,
+      invoices_found: invoicesFound,
+      scan_status: scanStatus,
+      scanned_at: new Date().toISOString(),
+      skipped_attachments: skippedAttachments,
+      filter_version: FILTER_VERSION,
+    },
+    keepExisting ? { onConflict: 'email_id', ignoreDuplicates: true } : undefined
+  )
 }
 
 async function updateScanState(scannedCount: number, invoicesCount: number) {
@@ -725,6 +749,9 @@ export async function POST(request: NextRequest) {
     const authHeader = { Authorization: `Bearer ${accessToken}` }
     const vendorCategoryMemory = await loadVendorCategoryMemory()
     const scanState = await getScanState()
+    // For the per-message check that skips the app's own accountant mails (src/lib/own-send.ts).
+    const ownAddress = await getGmailOwnAddress(accessToken)
+    const accountantEmail = await getAccountantEmail()
 
     const incrementalAfter = mode === 'full' ? '' : toGmailAfterQuery(scanState?.last_scan_completed_at)
     // -in:spam -in:trash (not in:inbox): archived and label-filtered vendor
@@ -834,6 +861,18 @@ export async function POST(request: NextRequest) {
       const subject = extractEmailHeader(headers, 'Subject')
       const dateStr = extractEmailHeader(headers, 'Date')
       const emailDate = dateStr ? new Date(dateStr).toISOString() : null
+
+      // The app's own accountant mails carry the invoice PDFs: read back, every sent invoice became a new row.
+      // -in:sent in the search is the first layer; this is the second (a marker header the send adds, or mail
+      // from this account to the accountant), so the scan does not depend on the Sent label alone.
+      const ownSend = ownSendReason({ headers, ownAddress, accountantEmail })
+      if (ownSend) {
+        skipped++
+        await recordScannedEmail(msg.id, emailDate, sender, subject, [], 0, 'no_attachments', [
+          { filename: '', reason: `own_accountant_send:${ownSend}` },
+        ], true)
+        continue
+      }
 
       const candidateParts = collectAttachmentParts(msg.payload || {})
       const skippedParts: SkippedAttachment[] = []
