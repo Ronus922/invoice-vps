@@ -43,4 +43,6 @@ export const duplicateQuerySchema = z.object({
   /** The form's typed total ("61.10", "1,234.50"), or ''. */
   total: z.string().trim().max(30).default(''),
   vendor_tax_id: z.string().trim().max(20).default(''),
+  /** The form's doc type: a tax invoice over a stored receipt is an upgrade, not a duplicate (src/lib/doc-upgrade.ts). */
+  doc_type: z.string().trim().max(40).default(''),
 })

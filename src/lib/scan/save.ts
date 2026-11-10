@@ -3,6 +3,7 @@ import { INVOICE_EXTRACTION_MODEL } from '@/lib/invoice-extraction-prompt'
 import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { finalizeInvoicePayload } from '@/lib/invoice-write'
 import { normalizeDocType } from '@/lib/doc-type'
+import { duplicateAction } from '@/lib/doc-upgrade'
 import { fromStoredDate, toStoredDate } from './format'
 import { compressReceiptImage, ScanImageError, type CompressedImage } from './image'
 import { receiptStoredName } from './downloadName'
@@ -25,6 +26,7 @@ import type { ScanSaveData } from './validation'
 
 export type SaveResult =
   | { kind: 'saved'; invoice: Record<string, unknown> }
+  | { kind: 'upgraded'; invoice: Record<string, unknown> }
   | { kind: 'duplicate'; existing: DuplicateInfo | null }
   | { kind: 'bad_image'; error: ScanImageError }
   | { kind: 'failed'; stage: 'lookup' | 'upload' | 'insert' }
@@ -51,7 +53,11 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
   } catch {
     return { kind: 'failed', stage: 'lookup' }
   }
-  if (existing) return { kind: 'duplicate', existing }
+  // Decision 1: this scan is a TAX INVOICE and the stored row is a RECEIPT of the same transaction — that row is
+  // upgraded with this photo instead of a new row being created (there is still no "save anyway": anything else that
+  // matches is a duplicate).
+  const upgrading = existing !== null && duplicateAction(existing.doc_type, docType) === 'upgrade'
+  if (existing && !upgrading) return { kind: 'duplicate', existing }
 
   // 2 — the photo.
   let img: CompressedImage
@@ -68,8 +74,26 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
     return { kind: 'failed', stage: 'upload' }
   }
 
-  // 3 — the row.
   const storedDate = toStoredDate(data.date)
+  const fileName = receiptStoredName({ vendor: data.vendor, docNumber: data.doc_number, docDate: fromStoredDate(storedDate), docType })
+
+  if (existing && upgrading) {
+    let upgraded
+    try {
+      upgraded = await store.upgradeInvoice(existing.id, { fileUrl: stored.fileUrl, fileName, docType })
+    } catch {
+      await store.removePhoto(stored.path)
+      return { kind: 'failed', stage: 'insert' }
+    }
+    if (!upgraded.ok) {
+      // The row stopped being a receipt in the meantime: the photo is an orphan, and the scan is a duplicate.
+      await store.removePhoto(stored.path)
+      return { kind: 'duplicate', existing }
+    }
+    return { kind: 'upgraded', invoice: upgraded.row }
+  }
+
+  // 3 — the row.
   const payload: Record<string, unknown> = {
     doc_type: docType,
     vendor: data.vendor,
@@ -85,7 +109,7 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
     category: data.category || null,
     source: 'scan',
     file_url: stored.fileUrl,
-    file_name: receiptStoredName({ vendor: data.vendor, docNumber: data.doc_number, docDate: fromStoredDate(storedDate), docType }),
+    file_name: fileName,
     image_bytes: img.bytes.length,
     scanned_by: actorId,
     created_by: actorId,

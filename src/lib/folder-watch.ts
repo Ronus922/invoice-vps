@@ -3,6 +3,7 @@ import { uploadFile } from '@/lib/upload'
 import { applyRememberedCategory, rememberVendorCategory } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
 import { findDuplicateInList } from '@/lib/doc-identity'
+import { duplicateAction } from '@/lib/doc-upgrade'
 
 const IDB_NAME = 'invoiceflow-folder-watch'
 const IDB_STORE = 'handles'
@@ -124,6 +125,40 @@ async function removeSourceFile(
   }
 }
 
+/** Decision 2 (2026-11-10): a duplicate's source file leaves the folder only AFTER the row it duplicates — and that
+ *  row's file in Storage — have been confirmed by the server (GET /api/invoices/verify). Anything that cannot be
+ *  confirmed (no id, no such row, a missing or empty file, a failed request) keeps the file in the folder. */
+export async function verifyExistingDocument(existingId: string | undefined, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  if (!existingId) return false
+  try {
+    const res = await fetchImpl(`/api/invoices/verify?id=${encodeURIComponent(existingId)}`, { credentials: 'include' })
+    if (!res.ok) return false
+    const body = (await res.json()) as { ok?: unknown }
+    return body.ok === true
+  } catch {
+    return false
+  }
+}
+
+async function removeConfirmedDuplicate(
+  dirHandle: FileSystemDirectoryHandle,
+  name: string,
+  existingId: string | undefined,
+  errorMessages: string[],
+  progress: FolderScanProgress
+): Promise<void> {
+  if (!(await verifyExistingDocument(existingId))) {
+    errorMessages.push(`${name}: הכפילות לא אומתה (השורה הקיימת או הקובץ שלה לא נמצאו) — הקובץ נשאר בתיקייה`)
+    progress.errors += 1
+    return
+  }
+  const removed = await removeSourceFile(dirHandle, name)
+  if (!removed.ok) {
+    errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
+    progress.errors += 1
+  }
+}
+
 // One scan at a time — across the scan panel, a double click, and other tabs.
 // Overlapping scans used to double-process files and then fail deleting what
 // the other run already deleted.
@@ -211,15 +246,12 @@ async function runFolderScanLocked(
       // Fast client-side pre-check on the document's identity (src/lib/doc-identity.ts: normalised doc_number +
       // date + total, + tax id when both sides have one — not the vendor's spelling, not the doc type). The server
       // (POST /api/invoices) checks again and is the real guard — this only avoids a needless round-trip.
-      const isDuplicate = findDuplicateInList(existingInvoices, extracted) !== null
-      if (isDuplicate) {
+      // Decision 1: a tax invoice over a stored RECEIPT is not skipped — the server upgrades that row.
+      const match = findDuplicateInList(existingInvoices, extracted)
+      if (match && duplicateAction(match.doc_type, docType) === 'skip') {
         progress.duplicates += 1
-        // Treat duplicate as a successful processing — remove the source file.
-        const removed = await removeSourceFile(dirHandle, name)
-        if (!removed.ok) {
-          errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
-          progress.errors += 1
-        }
+        // Treat duplicate as a successful processing — remove the source file, once the existing row is confirmed.
+        await removeConfirmedDuplicate(dirHandle, name, match.id, errorMessages, progress)
         continue
       }
 
@@ -232,9 +264,11 @@ async function runFolderScanLocked(
       })
 
       if (created && 'duplicate' in created) {
-        // The server's dedup caught a duplicate the snapshot missed (racy re-scan or
-        // two parallel scans). No row created — count it as a duplicate.
+        // The server's dedup caught a duplicate the snapshot missed (racy re-scan or two parallel scans), or
+        // upgraded a stored receipt to this tax invoice. No row created — count it as a duplicate; the source file
+        // goes only once the server's row (named in the answer) is confirmed.
         progress.duplicates += 1
+        await removeConfirmedDuplicate(dirHandle, name, created.existing_id, errorMessages, progress)
       } else {
         if (extracted.vendor && extracted.category) {
           rememberVendorCategory(extracted.vendor, extracted.category)
@@ -270,13 +304,13 @@ async function runFolderScanLocked(
         }
 
         progress.created += 1
-      }
 
-      // File processed (created or duplicate) — remove it from the folder.
-      const removed = await removeSourceFile(dirHandle, name)
-      if (!removed.ok) {
-        errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
-        progress.errors += 1
+        // File processed (created) — remove it from the folder.
+        const removed = await removeSourceFile(dirHandle, name)
+        if (!removed.ok) {
+          errorMessages.push(`${name}: לא ניתן למחוק מהתיקייה (${removed.error})`)
+          progress.errors += 1
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'שגיאה לא ידועה'

@@ -45,3 +45,34 @@ describe('finalizeInvoicePayload (the shared write-time normalisation)', () => {
     expect(fin({ vendor: 'A', doc_number: '1', total: null, currency: 'ILS' }).vat_derived).toBeUndefined()
   })
 })
+
+// Decision 5 (2026-11-10): a credit note is stored with a NEGATIVE total, pre-tax and VAT.
+describe('finalizeInvoicePayload — credit notes are stored negative', () => {
+  it('a credit note arriving with positive amounts is stored negative (the Reconcept 58857 case: 1,400 + 252 = 1,652)', () => {
+    const p = fin({ vendor: 'ריקונספט', doc_number: '58857', doc_type: 'credit_note', pretax: 1400, vat: 252, total: 1652, currency: 'ILS', date: '10/06/2026' })
+    expect([p.pretax, p.vat, p.total]).toEqual([-1400, -252, -1652])
+    expect(p.vat_derived).toBeUndefined() // the amounts reconcile: nothing to derive
+    expect(p.needs_review).toBeUndefined()
+  })
+
+  it('a Hebrew title is read as a credit note too', () => {
+    expect(fin({ vendor: 'A', doc_number: '1', doc_type: 'חשבונית זיכוי', total: 118, pretax: 100, vat: 18, currency: 'ILS' }).total).toBe(-118)
+  })
+
+  it('already-negative amounts stay as they are (no double flip)', () => {
+    const p = fin({ vendor: 'A', doc_number: '1', doc_type: 'credit_note', total: -118, pretax: -100, vat: -18, currency: 'ILS' })
+    expect([p.pretax, p.vat, p.total]).toEqual([-100, -18, -118])
+  })
+
+  it('VAT derived for a credit note with only a total comes out negative', () => {
+    const p = fin({ vendor: 'A', doc_number: '1', doc_type: 'credit_note', total: 118, currency: 'ILS', date: '01/03/2026' })
+    expect([p.pretax, p.vat, p.total, p.vat_derived]).toEqual([-100, -18, -118, true])
+  })
+
+  it('an invoice, a receipt and an unknown document keep their positive amounts', () => {
+    for (const doc_type of ['invoice', 'receipt', 'invoice_receipt', 'unknown']) {
+      const p = fin({ vendor: 'A', doc_number: '1', doc_type, total: 118, pretax: 100, vat: 18, currency: 'ILS' })
+      expect([p.pretax, p.vat, p.total], doc_type).toEqual([100, 18, 118])
+    }
+  })
+})

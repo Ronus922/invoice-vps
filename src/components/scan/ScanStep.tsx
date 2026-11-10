@@ -92,6 +92,8 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
   const [lowSet, setLowSet] = useState<ReadonlySet<keyof ScanValues>>(new Set())
 
   const [duplicate, setDuplicate] = useState<DuplicateInfo | null>(null)
+  // A stored RECEIPT of this transaction that saving this tax invoice will upgrade (Decision 1) — informs, never blocks.
+  const [upgradeOf, setUpgradeOf] = useState<DuplicateInfo | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState<SavedState | null>(null)
@@ -164,11 +166,12 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
     const ctl = new AbortController()
     const timer = setTimeout(async () => {
       try {
-        const q = new URLSearchParams({ doc_number: values.doc_number, date: values.date, total: values.total, vendor_tax_id: values.vendor_tax_id })
+        const q = new URLSearchParams({ doc_number: values.doc_number, date: values.date, total: values.total, vendor_tax_id: values.vendor_tax_id, doc_type: values.doc_type })
         const r = await fetch(`/api/scan/duplicate?${q}`, { credentials: 'include', signal: ctl.signal })
         if (!r.ok) return
-        const data = (await r.json()) as { duplicate?: boolean; existing?: DuplicateInfo | null }
+        const data = (await r.json()) as { duplicate?: boolean; upgrade?: boolean; existing?: DuplicateInfo | null }
         setDuplicate(data.duplicate ? (data.existing ?? null) : null)
+        setUpgradeOf(data.upgrade ? (data.existing ?? null) : null)
       } catch {
         /* the save step checks again */
       }
@@ -177,7 +180,7 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
       clearTimeout(timer)
       ctl.abort()
     }
-  }, [phase, values.doc_number, values.date, values.total, values.vendor_tax_id])
+  }, [phase, values.doc_number, values.date, values.total, values.vendor_tax_id, values.doc_type])
 
   function patch(p: Partial<ScanValues>) {
     setValues((v) => ({ ...v, ...p }))
@@ -374,6 +377,23 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
                     </p>
                     <p className="m-0 mt-1 text-[13px]" style={{ color: 'var(--muted-mid)' }}>
                       אם זו קבלה אחרת, תקן את הספק, המספר או סוג המסמך. אם זה אותו מסמך — לחץ „בטל”.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {upgradeOf && !duplicate && (
+                <div role="status" data-testid="scan-upgrade" className="flex items-start gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 p-4 text-sm">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
+                  <div className="min-w-0">
+                    <p className="m-0 font-bold">קבלה על אותה עסקה כבר קיימת — השמירה תשדרג אותה לחשבונית מס.</p>
+                    <p className="m-0 mt-1" style={{ color: 'var(--text2)' }}>
+                      {upgradeOf.vendor} · מס׳ {upgradeOf.doc_number}
+                      {upgradeOf.date ? ` · ${upgradeOf.date}` : ''}
+                      {upgradeOf.total !== null ? ` · ${formatCurrency(upgradeOf.total, upgradeOf.currency)}` : ''}
+                    </p>
+                    <p className="m-0 mt-1 text-[13px]" style={{ color: 'var(--muted-mid)' }}>
+                      הצילום הזה יחליף את קובץ הקבלה ויעדכן את סוג המסמך — לא תיווצר שורה נוספת.
                     </p>
                   </div>
                 </div>

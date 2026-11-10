@@ -33,6 +33,10 @@ export const fake = {
   insertError: null as { message: string; code?: string } | null,
   /** The rows inserted through `.insert()`, in order. */
   inserted: [] as Row[],
+  /** Every `.update()` as { values, filters } (the `.eq()` filters it carried), in order. */
+  updates: [] as Array<{ values: Record<string, unknown>; filters: string[] }>,
+  /** When set, every update fails with this error (e.g. { code: '23505' }). */
+  updateError: null as { message: string; code?: string } | null,
   requests: 0,
   reset(tables: Record<string, Row[]> = {}) {
     this.tables = new Map(Object.entries(tables))
@@ -41,6 +45,8 @@ export const fake = {
     this.failOnRequest = null
     this.insertError = null
     this.inserted = []
+    this.updates = []
+    this.updateError = null
     this.requests = 0
   },
 }
@@ -50,6 +56,8 @@ class Query implements PromiseLike<Result> {
   private filters: string[] = []
   private window: { from: number; to: number } | null = null
   private toInsert: Record<string, unknown> | null = null
+  private toUpdate: Record<string, unknown> | null = null
+  private wantsOne = false
 
   constructor(private readonly table: string) {}
 
@@ -89,7 +97,22 @@ class Query implements PromiseLike<Result> {
     return this
   }
 
-  single() { return this }
+  update(values: Record<string, unknown>) {
+    this.toUpdate = values
+    return this
+  }
+
+  single() {
+    this.wantsOne = true
+    return this
+  }
+
+  /** Rows matching every `.eq()` filter of this query — used ONLY by update and by `.single()` reads (a plain select
+   *  still only records its filters: the test feeds it matching rows). */
+  private matching(rows: Row[]): Row[] {
+    const eqs = this.filters.filter((f) => /^[a-z_]+=/.test(f)).map((f) => f.split('=') as [string, string])
+    return rows.filter((r) => eqs.every(([k, v]) => String(r[k]) === v))
+  }
 
   then<A = Result, B = never>(
     onFulfilled?: ((value: Result) => A | PromiseLike<A>) | null,
@@ -109,6 +132,18 @@ class Query implements PromiseLike<Result> {
       fake.inserted.push(row)
       fake.tables.set(this.table, [...(fake.tables.get(this.table) ?? []), row])
       return { data: row, error: null }
+    }
+
+    if (this.toUpdate) {
+      if (fake.updateError) return { data: null, error: fake.updateError }
+      fake.updates.push({ values: this.toUpdate, filters: this.filters })
+      const hit = this.matching(fake.tables.get(this.table) ?? [])
+      for (const r of hit) Object.assign(r, this.toUpdate)
+      return { data: hit.map((r) => ({ id: r.id })) as Row[], error: null }
+    }
+    if (this.wantsOne) {
+      const one = this.matching(fake.tables.get(this.table) ?? [])[0] ?? null
+      return one ? { data: one, error: null } : { data: null, error: { message: 'no rows', code: 'PGRST116' } }
     }
 
     const stored = fake.tables.get(this.table) ?? []

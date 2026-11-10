@@ -42,9 +42,10 @@ describe('the scan tool is the existing tool, widened — never a second schema'
       expect(SCAN_EXTRACTION_TOOL.input_schema.properties).toHaveProperty(key, schema)
     }
   })
-  it('adds only vendor_tax_id and a per-field confidence, both optional', () => {
+  it('adds only a per-field confidence, optional — the issuer tax id is read by every path now (Decision 4)', () => {
     const added = Object.keys(SCAN_EXTRACTION_TOOL.input_schema.properties).filter((k) => !(k in EXTRACTION_TOOL.input_schema.properties))
-    expect(added.sort()).toEqual(['confidence', 'vendor_tax_id'])
+    expect(added.sort()).toEqual(['confidence'])
+    expect(EXTRACTION_TOOL.input_schema.properties).toHaveProperty('vendor_tax_id')
     expect(SCAN_EXTRACTION_TOOL.input_schema.required).not.toContain('vendor_tax_id')
     expect(SCAN_EXTRACTION_TOOL.input_schema.required).not.toContain('confidence')
     expect(Object.keys(SCAN_EXTRACTION_TOOL.input_schema.properties.confidence.properties).sort()).toEqual([...SCAN_CONFIDENCE_FIELDS].sort())
