@@ -498,7 +498,7 @@ async function processAttachment(
             if (duplicateAction(existing.doc_type, extracted.doc_type) === 'upgrade') {
               const upgrade = await upgradeReceiptToTaxInvoice(supabase, existing.id, {
                 file_url,
-                file_name: filename || null,
+                file_name: filename || `invoice_${Date.now()}.pdf`,
                 doc_type: extracted.doc_type,
               })
               if (upgrade.upgraded) {
@@ -506,6 +506,13 @@ async function processAttachment(
                 rowCreated = true
                 console.warn('[scan-gmail] receipt upgraded to a tax invoice:', existing.id)
                 return { status: 'duplicate', filename, vendor: extracted.vendor, upgraded: true }
+              }
+              if (upgrade.reason === 'db_error') {
+                // The outcome is unknown (the update may have been committed): keep the uploaded object — a row may point at
+                // it — and report an error, so the message is scanned again instead of being counted as a duplicate.
+                rowCreated = true
+                console.error('[scan-gmail] receipt upgrade failed (db error) for', existing.id)
+                return { status: 'error', filename }
               }
               console.warn('[scan-gmail] upgrade not applied (%s) — handled as a duplicate of %s', upgrade.reason, existing.id)
             }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
 import { fake, fakeClient, type Row } from './fake-postgrest'
 
@@ -70,6 +70,17 @@ describe('upgradeReceiptToTaxInvoice', () => {
     fake.failOnRequest = 1 // the read of the old file_url
     expect(await upgradeReceiptToTaxInvoice(db, 'r1', NEW)).toEqual({ upgraded: false, reason: 'db_error' })
     expect(fake.updates).toHaveLength(0)
+  })
+
+  it('never deletes the replaced receipt file: a storage handle that is offered is never used (the file becomes an orphan, logged)', async () => {
+    const removed: string[][] = []
+    const withStorage = { from: fakeClient.from, storage: { from: () => ({ remove: async (p: string[]) => { removed.push(p); return { error: null } } }) } } as unknown as Parameters<typeof upgradeReceiptToTaxInvoice>[0]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await upgradeReceiptToTaxInvoice(withStorage, 'r1', NEW)).toMatchObject({ upgraded: true })
+    expect(removed).toEqual([])
+    // the audit trail: the row and the file it no longer points at
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('old file is now unreferenced'), { id: 'r1', replacedFileUrl: RECEIPT.file_url })
+    warn.mockRestore()
   })
 
   it('the same file arriving again (only the type changes) reports no replaced file', async () => {

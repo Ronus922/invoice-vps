@@ -52,7 +52,8 @@ export async function upgradeReceiptToTaxInvoice(
   if (!updated || updated.length !== 1) return { upgraded: false, reason: 'not_a_receipt' }
 
   if (replacedFileUrl && replacedFileUrl !== incoming.file_url) {
-    console.warn('[upgrade-receipt] receipt upgraded to a tax invoice; its old file is now unreferenced:', { id: existingId })
+    // The audit trail: which row, and which file it no longer points at (the bucket is private; the URL opens nothing by itself).
+    console.warn('[upgrade-receipt] receipt upgraded to a tax invoice; its old file is now unreferenced:', { id: existingId, replacedFileUrl })
   }
   return { upgraded: true, replacedFileUrl: replacedFileUrl !== incoming.file_url ? replacedFileUrl : null }
 }

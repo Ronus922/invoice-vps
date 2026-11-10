@@ -4,6 +4,7 @@ import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { finalizeInvoicePayload } from '@/lib/invoice-write'
 import { normalizeDocType } from '@/lib/doc-type'
 import { duplicateAction } from '@/lib/doc-upgrade'
+import { applyCreditNoteSign } from '@/lib/credit-note'
 import { fromStoredDate, toStoredDate } from './format'
 import { compressReceiptImage, ScanImageError, type CompressedImage } from './image'
 import { receiptStoredName } from './downloadName'
@@ -44,7 +45,11 @@ export interface SaveInput {
 export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Promise<SaveResult> {
   const { data, actorId } = input
   const docType = normalizeDocType(data.doc_type)
-  const key: DuplicateKey = { docNumber: data.doc_number, date: data.date, total: data.total, vendorTaxId: data.vendor_tax_id }
+  // A credit note is STORED negative (finalizeInvoicePayload below), so it is LOOKED UP negative too — the identity
+  // compares signed cents, and a lookup with the printed (positive) total would never meet the stored row.
+  const keyed = { doc_type: docType, total: data.total }
+  applyCreditNoteSign(keyed)
+  const key: DuplicateKey = { docNumber: data.doc_number, date: data.date, total: keyed.total, vendorTaxId: data.vendor_tax_id }
 
   // 1 — the identity, before any heavy work or any write.
   let existing: DuplicateInfo | null
@@ -82,10 +87,11 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
     try {
       upgraded = await store.upgradeInvoice(existing.id, { fileUrl: stored.fileUrl, fileName, docType })
     } catch {
-      await store.removePhoto(stored.path)
+      // The outcome is unknown (the update may have been committed): the photo may be the row's file now — keep it.
       return { kind: 'failed', stage: 'insert' }
     }
     if (!upgraded.ok) {
+      if (upgraded.inconclusive) return { kind: 'failed', stage: 'insert' } // a database error: keep the photo, ask to retry
       // The row stopped being a receipt in the meantime: the photo is an orphan, and the scan is a duplicate.
       await store.removePhoto(stored.path)
       return { kind: 'duplicate', existing }

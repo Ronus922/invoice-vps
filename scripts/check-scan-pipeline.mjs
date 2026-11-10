@@ -117,6 +117,17 @@ run('check-scan-pipeline', async () => {
   need(afterLookup.indexOf('upgradeReceiptToTaxInvoice(') !== -1 && afterLookup.indexOf('upgradeReceiptToTaxInvoice(') < afterLookup.indexOf('removeUploadedObject()'),
     'Gmail: השדרוג לפני מחיקת הקובץ שהועלה', 'scan-gmail: הקובץ שהועלה נמחק לפני שנבדק השדרוג — אחרי שדרוג הוא קובץ השורה הקיימת')
 
+  // (after a successful upgrade — and after a database error that leaves the outcome unknown — the uploaded object may be the
+  // row's file: rowCreated = true keeps the catch below from removing it)
+  const upgradeBlock = afterLookup.slice(afterLookup.indexOf('upgradeReceiptToTaxInvoice('), afterLookup.indexOf('removeUploadedObject()'))
+  need((upgradeBlock.match(/rowCreated = true/g) ?? []).length === 2 && /reason === 'db_error'[\s\S]{0,800}status: 'error'/.test(upgradeBlock),
+    'Gmail: אחרי שדרוג (או כשל DB לא חד-משמעי) האובייקט שהועלה נשמר',
+    'scan-gmail: שדרוג שהצליח, וכשל DB בשדרוג, חייבים לסמן rowCreated = true (האובייקט עשוי להיות קובץ השורה) ולהחזיר error ולא duplicate')
+
+  // the phone-scan screen sends nothing to the accountant after an upgrade (the row is an existing, already-sent receipt)
+  need(/data\.upgraded === true/.test(read('src/components/scan/ScanStep.tsx')) && /!needsReview && !upgraded/.test(read('src/components/scan/ScanStep.tsx')),
+    'מסך הסריקה מהטלפון: אחרי שדרוג לא נשלח דבר לרו"ח', 'ScanStep חייב לדלג על /api/send-to-accountant כשהתשובה היא upgraded (השורה היא קבלה קיימת שכבר נשלחה)')
+
   // Decision 2 — a duplicate's source file leaves the folder only after the existing row and its file are confirmed
   const calls = folder.split('removeSourceFile(dirHandle, name)').length - 1
   need(calls === 2 && before(folder, 'async function removeConfirmedDuplicate(', 'verifyExistingDocument(existingId)') && before(folder, 'verifyExistingDocument(existingId)', 'const removed = await removeSourceFile(dirHandle, name)'),

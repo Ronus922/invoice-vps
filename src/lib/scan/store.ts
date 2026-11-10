@@ -34,7 +34,8 @@ export interface DuplicateKey {
   vendorTaxId: string | null
 }
 
-export type UpgradeResult = { ok: true; row: Record<string, unknown> } | { ok: false }
+/** `inconclusive`: a database error — the update may or may not have been committed, so the photo may be the row's file. */
+export type UpgradeResult = { ok: true; row: Record<string, unknown> } | { ok: false; inconclusive: boolean }
 
 export interface ScanStore {
   /** The existing row that is the same document (normalised doc_number + date + total, + tax id when both have one), or null. */
@@ -44,7 +45,8 @@ export interface ScanStore {
   removePhoto(path: string): Promise<boolean>
   insertInvoice(row: Record<string, unknown>): Promise<InsertResult>
   /** Decision 1 (src/lib/doc-upgrade.ts): the stored RECEIPT `existingId` takes this tax invoice's photo and type — no new
-   *  row. `ok: false` = it was not upgraded (the row changed in the meantime); the caller removes the photo. */
+   *  row. `ok: false` = it was not upgraded: conclusively (the row changed in the meantime — the caller removes the
+   *  photo) or `inconclusive` (a database error — the caller must KEEP the photo). */
   upgradeInvoice(existingId: string, input: { fileUrl: string; fileName: string; docType: DocType }): Promise<UpgradeResult>
 }
 
@@ -81,7 +83,7 @@ export function supabaseScanStore(): ScanStore {
 
     async upgradeInvoice(existingId, input) {
       const res = await upgradeReceiptToTaxInvoice(admin(), existingId, { file_url: input.fileUrl, file_name: input.fileName, doc_type: input.docType })
-      if (!res.upgraded) return { ok: false }
+      if (!res.upgraded) return { ok: false, inconclusive: res.reason === 'db_error' }
       // The photo is the row's file from here on — if the read-back fails the answer is still "upgraded".
       const { data } = await admin().from('invoices').select('*').eq('id', existingId).single()
       return { ok: true, row: (data as Record<string, unknown> | null) ?? { id: existingId } }

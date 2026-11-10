@@ -284,15 +284,47 @@ describe('a scanned tax invoice upgrades a stored receipt of the same transactio
     }
   })
 
-  it('the row changed in the meantime (not upgraded): the stored photo is removed and the scan is reported as a duplicate', async () => {
-    const { store, log } = fakeStore({ existing: EXISTING, upgrade: { ok: false } })
+  it('the row changed in the meantime (conclusively not upgraded): the stored photo is removed and the scan is reported as a duplicate', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING, upgrade: { ok: false, inconclusive: false } })
     expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'duplicate', existing: EXISTING })
     expect(log).toEqual(['find', 'upload', 'upgrade', 'remove:invoices/abc.jpg'])
   })
 
-  it('a database error during the upgrade removes the photo and fails the save — never a half state', async () => {
+  it('a database error during the upgrade fails the save and KEEPS the photo — the update may have been committed, so the photo may be the row\'s file', async () => {
     const { store, log } = fakeStore({ existing: EXISTING, upgradeThrows: true })
     expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'failed', stage: 'insert' })
-    expect(log).toEqual(['find', 'upload', 'upgrade', 'remove:invoices/abc.jpg'])
+    expect(log).toEqual(['find', 'upload', 'upgrade']) // no remove:…
+  })
+
+  it('an inconclusive answer from the store (a database error) also keeps the photo and asks to retry — it is not reported as a duplicate', async () => {
+    const { store, log } = fakeStore({ existing: EXISTING, upgrade: { ok: false, inconclusive: true } })
+    expect(await run(store, data({ doc_type: 'invoice' }))).toEqual({ kind: 'failed', stage: 'insert' })
+    expect(log).toEqual(['find', 'upload', 'upgrade'])
+  })
+})
+
+// Decision 5: a credit note is STORED negative, so it is LOOKED UP negative — the identity compares signed cents.
+describe('a scanned credit note is looked up with its signed total', () => {
+  it('a printed (positive) total on a credit note is looked up negative, and stored negative', async () => {
+    const seen: { total: number | null }[] = []
+    const { store, inserted } = fakeStore()
+    const spy: ScanStore = { ...store, async findDuplicate(key) { seen.push({ total: key.total }); return null } }
+    await run(spy, data({ doc_type: 'credit_note', total: 1652, pretax: 1400, vat: 252 }))
+    expect(seen[0]!.total).toBe(-1652)
+    expect(inserted[0]!.total).toBe(-1652)
+  })
+
+  it('so a second scan of the same credit note meets the stored (negative) row', async () => {
+    const stored: DuplicateInfo = { ...EXISTING, doc_number: '58857', doc_type: 'credit_note', total: -1652 }
+    const { store, log } = fakeStore({ existing: stored })
+    expect(await run(store, data({ doc_type: 'credit_note', doc_number: '58857', total: 1652, pretax: 1400, vat: 252 }))).toEqual({ kind: 'duplicate', existing: stored })
+    expect(log).toEqual(['find'])
+  })
+
+  it('an invoice keeps its positive total in the lookup', async () => {
+    const seen: (number | null)[] = []
+    const { store } = fakeStore()
+    await run({ ...store, async findDuplicate(key) { seen.push(key.total); return null } }, data({ doc_type: 'invoice', total: 118, pretax: 100, vat: 18 }))
+    expect(seen).toEqual([118])
   })
 })

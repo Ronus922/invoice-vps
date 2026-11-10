@@ -160,11 +160,6 @@ describe('POST /api/invoices — a tax invoice upgrades a stored receipt', () =>
     expect(fake.tables.get('invoices')![0]!.doc_type).toBe('invoice_receipt')
   })
 
-  it('the old receipt file is NOT deleted by the upgrade (it becomes an orphan; scripts/delete-orphans.ts cleans up with a backup)', async () => {
-    await post(INVOICE_IN)
-    expect(fake.calls.every((c) => c.table === 'invoices')).toBe(true) // the fake has no storage: any storage call would have thrown
-  })
-
   it('a receipt over a stored receipt is a plain duplicate — no update', async () => {
     const res = await post({ ...INVOICE_IN, doc_type: 'receipt' })
     expect(await res.json()).toEqual({ duplicate: true, existing_id: 'receipt-row-01' })
@@ -187,19 +182,35 @@ describe('POST /api/invoices — a tax invoice upgrades a stored receipt', () =>
     }
   })
 
-  it('no file on the incoming document: nothing to put in the row\'s place — a plain duplicate', async () => {
+  it('no file on the incoming document: nothing to put in the row\'s place — a duplicate that names no row (the caller keeps what it has)', async () => {
     const { file_url: _f, file_name: _n, ...noFile } = INVOICE_IN
     void _f; void _n
     const body = await (await post(noFile)).json()
-    expect(body).toEqual({ duplicate: true, existing_id: 'receipt-row-01' })
+    expect(body).toEqual({ duplicate: true })
     expect(fake.updates).toHaveLength(0)
   })
 
-  it('the unique index rejects the upgrade (another row holds that identity as an invoice): handled as a duplicate, nothing inserted', async () => {
+  it('the unique index rejects the upgrade (another row holds that identity as an invoice): a duplicate that names NO row, so the folder scan keeps its file', async () => {
     fake.updateError = { message: 'duplicate key', code: '23505' }
-    const body = await (await post(INVOICE_IN)).json()
-    expect(body).toEqual({ duplicate: true, existing_id: 'receipt-row-01' })
+    const res = await post(INVOICE_IN)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ duplicate: true })
     expect(fake.inserted).toHaveLength(0)
+  })
+
+  it('a database error during the upgrade is an ERROR (500), never "duplicate": the outcome is unknown, so the caller keeps its file and retries', async () => {
+    fake.updateError = { message: 'connection reset', code: 'XX000' }
+    const res = await post(INVOICE_IN)
+    expect(res.status).toBe(500)
+    expect(((await res.json()) as Record<string, unknown>).duplicate).toBeUndefined()
+    expect(fake.inserted).toHaveLength(0)
+  })
+
+  it('another TAX INVOICE of the same document already exists beside the receipt: nothing is upgraded — a plain duplicate of the invoice', async () => {
+    fake.reset({ invoices: [{ ...RECEIPT_ROW }, { ...RECEIPT_ROW, id: 'invoice-row-02', doc_type: 'invoice', created_at: '2026-06-06T10:00:00Z' }] })
+    const body = await (await post(INVOICE_IN)).json()
+    expect(body).toEqual({ duplicate: true, existing_id: 'invoice-row-02' })
+    expect(fake.updates).toHaveLength(0)
   })
 })
 
@@ -270,5 +281,31 @@ describe('POST /api/invoices — a credit note is stored negative', () => {
   it('an invoice keeps its positive amounts', async () => {
     await post({ vendor: 'A', doc_number: '7', doc_type: 'invoice', date: '05/11/2026', pretax: 100, vat: 18, total: 118, currency: 'ILS', source: 'folder' })
     expect([fake.inserted[0]!.pretax, fake.inserted[0]!.vat, fake.inserted[0]!.total]).toEqual([100, 18, 118])
+  })
+})
+
+describe('PATCH /api/invoices — vendor_tax_id is normalised like on POST', () => {
+  beforeEach(() => {
+    fake.reset({ invoices: [{ id: 'row-1', vendor: 'MAX', doc_number: '5', doc_type: 'invoice', date: '01/07/2026', total: 50, currency: 'ILS', vendor_tax_id: null, created_at: '2026-07-02T10:00:00Z' }] })
+    auth.user = { id: 'u1' }
+  })
+  const patch = async (body: Record<string, unknown>) => {
+    const { PATCH } = await import('@/app/api/invoices/route')
+    return PATCH(new NextRequest('http://localhost/api/invoices', { method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }))
+  }
+
+  it('digits only, 8–9 of them: "ח.פ. 51-5456002" is stored as 515456002', async () => {
+    await patch({ id: 'row-1', vendor_tax_id: 'ח.פ. 51-5456002' })
+    expect(fake.updates[0]!.values.vendor_tax_id).toBe('515456002')
+  })
+
+  it('a garbled value (not 8–9 digits) is stored as null', async () => {
+    await patch({ id: 'row-1', vendor_tax_id: '12-34' })
+    expect(fake.updates[0]!.values.vendor_tax_id).toBeNull()
+  })
+
+  it('a PATCH that does not mention the tax id does not touch it', async () => {
+    await patch({ id: 'row-1', category: 'אחר' })
+    expect('vendor_tax_id' in fake.updates[0]!.values).toBe(false)
   })
 })

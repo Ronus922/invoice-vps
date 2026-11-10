@@ -71,6 +71,18 @@ describe('findDuplicateDocument', () => {
     expect((await findDuplicateDocument(db, { doc_number: '1011014259', date: '08/11/2026', total: 155.7 }))?.id).toBe('early')
   })
 
+  it('a tax invoice of the document outranks an EARLIER receipt of it — so a new tax invoice cannot "upgrade" the receipt and leave two', async () => {
+    fake.reset({ invoices: [row({ id: 'receipt', doc_type: 'receipt', created_at: '2026-11-01T00:00:00Z' }), row({ id: 'tax-invoice', doc_type: 'invoice', created_at: '2026-11-05T00:00:00Z' })] })
+    expect((await findDuplicateDocument(db, { doc_number: '1011014259', date: '08/11/2026', total: 155.7 }))?.id).toBe('tax-invoice')
+    fake.reset({ invoices: [row({ id: 'receipt', doc_type: 'receipt', created_at: '2026-11-01T00:00:00Z' }), row({ id: 'both', doc_type: 'invoice_receipt', created_at: '2026-11-05T00:00:00Z' })] })
+    expect((await findDuplicateDocument(db, { doc_number: '1011014259', date: '08/11/2026', total: 155.7 }))?.id).toBe('both')
+  })
+
+  it('without a tax invoice among the copies the earliest still wins, whatever its type', async () => {
+    fake.reset({ invoices: [row({ id: 'r2', doc_type: 'receipt', created_at: '2026-11-05T00:00:00Z' }), row({ id: 'u1', doc_type: 'unknown', created_at: '2026-11-01T00:00:00Z' })] })
+    expect((await findDuplicateDocument(db, { doc_number: '1011014259', date: '08/11/2026', total: 155.7 }))?.id).toBe('u1')
+  })
+
   it('sees a duplicate that sits beyond the first 1000 rows of the same total (the shared PostgREST cuts a response at 1000)', async () => {
     const fillers = Array.from({ length: MAX_ROWS + 50 }, (_, i) =>
       row({ id: `f-${String(i).padStart(5, '0')}`, doc_number: `F${i}`, created_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() }),

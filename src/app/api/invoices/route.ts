@@ -179,7 +179,16 @@ export async function POST(request: NextRequest) {
           console.warn('[invoices POST] receipt upgraded to a tax invoice:', existing.id)
           return NextResponse.json({ duplicate: true, upgraded: true, existing_id: existing.id }, { status: 200 })
         }
-        console.warn('[invoices POST] upgrade not applied (%s) — handled as a duplicate of %s', upgrade.reason, existing.id)
+        // A database error leaves the outcome unknown (the update may have been committed): answer an error — never "duplicate" —
+        // so the caller keeps its file and tries again.
+        if (upgrade.reason === 'db_error') {
+          console.error('[invoices POST] receipt upgrade failed (db error) for', existing.id)
+          return NextResponse.json({ error: 'שדרוג הקבלה לחשבונית מס נכשל — נסה שוב' }, { status: 500 })
+        }
+        // Conclusively not upgraded (the row changed, a conflict). Say nothing about the existing row: with no existing_id
+        // the folder scan keeps its source file — which is now the only copy of this tax invoice.
+        console.warn('[invoices POST] upgrade not applied (%s) — duplicate of %s, source file not confirmed', upgrade.reason, existing.id)
+        return NextResponse.json({ duplicate: true }, { status: 200 })
       }
       console.warn('[invoices POST] duplicate skipped: same document as', existing.id)
       return NextResponse.json({ duplicate: true, existing_id: existing.id }, { status: 200 })
@@ -249,6 +258,7 @@ export async function PATCH(request: NextRequest) {
   }
   const updates: Record<string, unknown> = { ...parsed.data }
   if ('doc_type' in updates) updates.doc_type = normalizeDocType(updates.doc_type)
+  if ('vendor_tax_id' in updates) updates.vendor_tax_id = normalizeTaxId(updates.vendor_tax_id) || null
   // On PATCH an empty total means "not provided" — dropping it keeps the
   // current value instead of zeroing a valid total (which would flag the row).
   if ('total' in updates && updates.total == null) delete updates.total

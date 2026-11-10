@@ -4,6 +4,7 @@ import { supabaseScanStore } from '@/lib/scan/store'
 import { parseAmount } from '@/lib/scan/format'
 import { duplicateQuerySchema } from '@/lib/scan/validation'
 import { duplicateAction } from '@/lib/doc-upgrade'
+import { applyCreditNoteSign } from '@/lib/credit-note'
 
 export const runtime = 'nodejs'
 
@@ -25,11 +26,15 @@ export async function GET(req: NextRequest) {
   })
   if (!parsed.success) return NextResponse.json({ error: 'פרמטרים לא תקינים' }, { status: 400 })
 
+  // A credit note is stored negative, so the early warning looks it up negative (same as saveScannedReceipt).
+  const keyed = { doc_type: parsed.data.doc_type, total: parseAmount(parsed.data.total) }
+  applyCreditNoteSign(keyed)
+
   try {
     const existing = await supabaseScanStore().findDuplicate({
       docNumber: parsed.data.doc_number,
       date: parsed.data.date || null,
-      total: parseAmount(parsed.data.total),
+      total: keyed.total,
       vendorTaxId: parsed.data.vendor_tax_id || null,
     })
     // Decision 1: a tax invoice over a stored RECEIPT is not blocked — saving upgrades that row. `upgrade` tells the form so.
