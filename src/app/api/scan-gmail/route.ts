@@ -20,6 +20,7 @@ import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { coerceRequiredIdentityFields } from '@/lib/invoice-write'
 import { v4 as uuidv4 } from 'uuid'
 import { safeEqual } from '@/lib/safe-compare'
+import { fetchAllRows } from '@/lib/fetch-all-rows'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -266,11 +267,21 @@ function toGmailAfterQuery(isoDate: string | null | undefined): string {
 }
 
 async function loadVendorCategoryMemory(): Promise<Map<string, string>> {
-  const { data } = await supabase
-    .from('invoices')
-    .select('vendor, category')
-    .not('category', 'is', null)
-    .limit(3000)
+  // Every categorised row. The old `.limit(3000)` was really 1000: PostgREST's max-rows caps a response
+  // whatever the limit says, so vendors outside an arbitrary first 1000 rows were never remembered.
+  // Oldest first, so when one vendor has several categories the most recently updated row wins — the same
+  // choice findRememberedCategory (POST /api/invoices) makes.
+  const { data } = await fetchAllRows<{ id: string; vendor: string | null; category: string | null }>(
+    (from, to) =>
+      supabase
+        .from('invoices')
+        .select('id, vendor, category')
+        .not('category', 'is', null)
+        .order('updated_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { key: (row) => row.id },
+  )
 
   const memory = new Map<string, string>()
   for (const row of data || []) {

@@ -7,6 +7,7 @@ import { validateInvoiceArithmetic } from '@/lib/invoice-validation'
 import { normalizeDocType, isNonInvoiceDocType, NON_INVOICE_REVIEW_MESSAGE } from '@/lib/doc-type'
 import { deriveVatFromTotal } from '@/lib/vat-derivation'
 import { finalizeInvoicePayload } from '@/lib/invoice-write'
+import { fetchAllRows } from '@/lib/fetch-all-rows'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -107,17 +108,27 @@ export async function GET(request: NextRequest) {
   const rawField = desc ? sortParam.slice(1) : sortParam
   const field = SORTABLE_FIELDS.has(rawField) ? rawField : 'created_at'
 
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('*')
-    .order(field, { ascending: !desc })
+  // PostgREST answers at most max-rows (1000) per request, silently — one plain select would drop every row
+  // past the 1000th (the oldest invoices vanished from the home page at 1057 rows). So: page through the
+  // table. `id` is the tie-breaker: many rows share a vendor / source / date, and without a total order the
+  // pages could repeat or skip rows.
+  const { data, error } = await fetchAllRows<Record<string, unknown>>(
+    (from, to) =>
+      supabase
+        .from('invoices')
+        .select('*')
+        .order(field, { ascending: !desc })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { key: (row) => String(row.id) },
+  )
 
   if (error) {
     console.error('[invoices GET] supabase error:', error)
     return NextResponse.json({ error: 'טעינת החשבוניות נכשלה' }, { status: 500 })
   }
 
-  return NextResponse.json(data || [])
+  return NextResponse.json(data)
 }
 
 export async function POST(request: NextRequest) {
