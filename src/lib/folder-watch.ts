@@ -1,5 +1,6 @@
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
-import { uploadFile } from '@/lib/upload'
+import { uploadFile, discardUploadedFile } from '@/lib/upload'
+import { sha256Hex } from '@/lib/file-hash'
 import { applyRememberedCategory, rememberVendorCategory } from '@/lib/vendor-category-memory'
 import { normalizeDocType } from '@/lib/doc-type'
 import { findDuplicateInList } from '@/lib/doc-identity'
@@ -17,6 +18,8 @@ export interface FolderScanProgress {
   processed: number
   created: number
   duplicates: number
+  /** Duplicates skipped by their remembered hash — before any upload or extraction (src/lib/folder-hashes.ts). Counted in `duplicates` too. */
+  skippedKnown: number
   errors: number
   currentFile: string | null
 }
@@ -25,6 +28,10 @@ export interface FolderScanResult {
   total: number
   created: number
   duplicates: number
+  /** Of `duplicates`: files left in the folder because their original could not be confirmed, skipped by hash. */
+  skippedKnown: number
+  /** Their names — the skip is silent otherwise, and it trusts an old verdict, so the owner can see exactly which files wait. */
+  skippedKnownFiles: string[]
   errors: number
   errorMessages: string[]
 }
@@ -125,18 +132,69 @@ async function removeSourceFile(
   }
 }
 
+/** What the server says about the row a duplicate points at (GET /api/invoices/verify):
+ *  'ok' — the row exists and its file is in Storage; 'not_found' — there is no such row (any more);
+ *  'unconfirmed' — anything else (a missing or empty file, an external legacy URL, a failed request, no id). */
+export type ExistingDocumentStatus = 'ok' | 'not_found' | 'unconfirmed'
+
+export async function checkExistingDocument(existingId: string | undefined, fetchImpl: typeof fetch = fetch): Promise<ExistingDocumentStatus> {
+  if (!existingId) return 'unconfirmed'
+  try {
+    const res = await fetchImpl(`/api/invoices/verify?id=${encodeURIComponent(existingId)}`, { credentials: 'include' })
+    if (!res.ok) return 'unconfirmed'
+    const body = (await res.json()) as { ok?: unknown; reason?: unknown }
+    if (body.ok === true) return 'ok'
+    return body.reason === 'not_found' ? 'not_found' : 'unconfirmed'
+  } catch {
+    return 'unconfirmed'
+  }
+}
+
 /** Decision 2 (2026-11-10): a duplicate's source file leaves the folder only AFTER the row it duplicates — and that
  *  row's file in Storage — have been confirmed by the server (GET /api/invoices/verify). Anything that cannot be
  *  confirmed (no id, no such row, a missing or empty file, a failed request) keeps the file in the folder. */
 export async function verifyExistingDocument(existingId: string | undefined, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  if (!existingId) return false
+  return (await checkExistingDocument(existingId, fetchImpl)) === 'ok'
+}
+
+/** What an earlier scan remembered about a file's bytes: it was recognised as a duplicate that could not be confirmed. */
+export interface KnownDuplicateHash {
+  existing_id: string | null
+}
+
+/** Is this file one an earlier scan recognised as an unconfirmable duplicate? null = unknown — and also when the lookup
+ *  fails: the scan then proceeds exactly as it did before hashes were remembered. */
+export async function lookupKnownHash(hash: string, fetchImpl: typeof fetch = fetch): Promise<KnownDuplicateHash | null> {
   try {
-    const res = await fetchImpl(`/api/invoices/verify?id=${encodeURIComponent(existingId)}`, { credentials: 'include' })
-    if (!res.ok) return false
-    const body = (await res.json()) as { ok?: unknown }
-    return body.ok === true
+    const res = await fetchImpl('/api/folder-hashes/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hashes: [hash] }),
+      credentials: 'include',
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as { known?: { sha256?: unknown; existing_id?: unknown }[] }
+    const hit = (body.known ?? []).find((k) => k.sha256 === hash)
+    return hit ? { existing_id: typeof hit.existing_id === 'string' ? hit.existing_id : null } : null
   } catch {
-    return false
+    return null
+  }
+}
+
+/** Remember a duplicate that could not be confirmed, so the next scans skip it before the upload and the extraction. Never throws. */
+export async function rememberUnverifiedDuplicate(
+  record: { sha256: string; existing_id: string; file_name: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  try {
+    await fetchImpl('/api/folder-hashes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...record, reason: 'unverified_duplicate' }),
+      credentials: 'include',
+    })
+  } catch {
+    /* the file is simply scanned again next time */
   }
 }
 
@@ -145,11 +203,17 @@ async function removeConfirmedDuplicate(
   name: string,
   existingId: string | undefined,
   errorMessages: string[],
-  progress: FolderScanProgress
+  progress: FolderScanProgress,
+  hash: string | null,
 ): Promise<void> {
   if (!(await verifyExistingDocument(existingId))) {
     errorMessages.push(`${name}: הכפילות לא אומתה (השורה הקיימת או הקובץ שלה לא נמצאו) — הקובץ נשאר בתיקייה`)
     progress.errors += 1
+    // Remember the file's bytes — but only when the row it duplicates is NAMED: the next scans skip it while that row still
+    // exists and is still unconfirmable (src/lib/folder-hashes.ts). A duplicate the server could not name (a transient
+    // answer: a lookup that failed, a lost race) is NOT remembered — its file may be the only copy of a real document, and
+    // the next scan resolves it with a fresh extraction, exactly as before.
+    if (hash && existingId) await rememberUnverifiedDuplicate({ sha256: hash, existing_id: existingId, file_name: name })
     return
   }
   const removed = await removeSourceFile(dirHandle, name)
@@ -201,6 +265,7 @@ async function runFolderScanLocked(
     processed: 0,
     created: 0,
     duplicates: 0,
+    skippedKnown: 0,
     errors: 0,
     currentFile: null,
   }
@@ -208,11 +273,16 @@ async function runFolderScanLocked(
   report()
 
   const errorMessages: string[] = []
+  const skippedKnownFiles: string[] = []
 
   for (const { name, fileHandle } of files) {
     progress.currentFile = name
     report()
 
+    // The file is stored BEFORE the document is read: every exit that ends without a row removes it again (owner's
+    // decision of 2026-11-11). `rowKept` = a row (or an upgraded row) now points at it.
+    let uploadedUrl: string | null = null
+    let rowKept = false
     try {
       let file: File
       try {
@@ -225,7 +295,23 @@ async function runFolderScanLocked(
         }
         throw err
       }
+
+      // A file an earlier scan recognised as a duplicate it could not confirm is skipped here — before the upload and
+      // before the (billed) extraction — but ONLY while that is still true: the row it duplicates must still exist and
+      // still be unconfirmable. If the row is gone, or its file is confirmable now, the memory is stale and the file is
+      // scanned normally (a fresh extraction and identity match decide, and only then may the source file be deleted —
+      // a remembered file is never deleted on the strength of an old match).
+      const hash = await sha256Hex(file).catch(() => null)
+      const known = hash ? await lookupKnownHash(hash) : null
+      if (known && known.existing_id && (await checkExistingDocument(known.existing_id)) === 'unconfirmed') {
+        progress.duplicates += 1
+        progress.skippedKnown += 1
+        skippedKnownFiles.push(name)
+        continue
+      }
+
       const fileUrl = await uploadFile(file)
+      uploadedUrl = fileUrl
 
       const res = await fetch('/api/extract-invoice', {
         method: 'POST',
@@ -237,6 +323,7 @@ async function runFolderScanLocked(
         const errData = await res.json().catch(() => ({}))
         errorMessages.push(`${name}: ${errData.error || 'חילוץ נכשל'}`)
         progress.errors += 1
+        await discardUploadedFile(fileUrl)
         continue
       }
 
@@ -250,8 +337,10 @@ async function runFolderScanLocked(
       const match = findDuplicateInList(existingInvoices, extracted)
       if (match && duplicateAction(match.doc_type, docType) === 'skip') {
         progress.duplicates += 1
+        // The uploaded copy has no row and will get none: remove it again.
+        await discardUploadedFile(fileUrl)
         // Treat duplicate as a successful processing — remove the source file, once the existing row is confirmed.
-        await removeConfirmedDuplicate(dirHandle, name, match.id, errorMessages, progress)
+        await removeConfirmedDuplicate(dirHandle, name, match.id, errorMessages, progress, hash)
         continue
       }
 
@@ -266,10 +355,13 @@ async function runFolderScanLocked(
       if (created && 'duplicate' in created) {
         // The server's dedup caught a duplicate the snapshot missed (racy re-scan or two parallel scans), or
         // upgraded a stored receipt to this tax invoice. No row created — count it as a duplicate; the source file
-        // goes only once the server's row (named in the answer) is confirmed.
+        // goes only once the server's row (named in the answer) is confirmed. (The server removed the uploaded copy
+        // itself when it was a plain duplicate; an upgrade keeps it — it is the row's file now.)
         progress.duplicates += 1
-        await removeConfirmedDuplicate(dirHandle, name, created.existing_id, errorMessages, progress)
+        if (created.upgraded) rowKept = true
+        await removeConfirmedDuplicate(dirHandle, name, created.existing_id, errorMessages, progress, hash)
       } else {
+        rowKept = true
         if (extracted.vendor && extracted.category) {
           rememberVendorCategory(extracted.vendor, extracted.category)
         }
@@ -313,6 +405,9 @@ async function runFolderScanLocked(
         }
       }
     } catch (err) {
+      // No row: remove the uploaded copy. A failed save whose answer was lost may still have committed — the server
+      // never removes an object a row points at, so that case keeps its file.
+      if (uploadedUrl && !rowKept) await discardUploadedFile(uploadedUrl)
       const message = err instanceof Error ? err.message : 'שגיאה לא ידועה'
       errorMessages.push(`${name}: ${message}`)
       progress.errors += 1
@@ -329,6 +424,8 @@ async function runFolderScanLocked(
     total: progress.total,
     created: progress.created,
     duplicates: progress.duplicates,
+    skippedKnown: progress.skippedKnown,
+    skippedKnownFiles,
     errors: progress.errors,
     errorMessages,
   }

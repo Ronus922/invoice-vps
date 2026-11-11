@@ -137,7 +137,7 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
     scanInFlight.current = true
     setScanning(true)
     setLastResult(null)
-    setProgress({ total: 0, processed: 0, created: 0, duplicates: 0, errors: 0, currentFile: null })
+    setProgress({ total: 0, processed: 0, created: 0, duplicates: 0, skippedKnown: 0, errors: 0, currentFile: null })
 
     try {
       const invoices = await InvoiceEntity.list('-created_at')
@@ -278,8 +278,15 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
                     <p className="font-medium">
                       הסריקה הסתיימה — {lastResult.created} נוצרו
                       {lastResult.duplicates > 0 ? ` · ${lastResult.duplicates} כפולות` : ''}
+                      {lastResult.skippedKnown > 0 ? ` (${lastResult.skippedKnown} מהן כפילויות לא מאומתות שנשארו בתיקייה — דולגו בלי חילוץ)` : ''}
                       {lastResult.errors > 0 ? ` · ${lastResult.errors} שגיאות` : ''}
                     </p>
+                    {lastResult.skippedKnownFiles.length > 0 && (
+                      <p className="text-xs text-[#8fb0e8] mt-1">
+                        נשארו בתיקייה (כפילות שלא אומתה, דולגו בלי חילוץ): {lastResult.skippedKnownFiles.slice(0, 5).join(', ')}
+                        {lastResult.skippedKnownFiles.length > 5 ? ` ועוד ${lastResult.skippedKnownFiles.length - 5}` : ''}
+                      </p>
+                    )}
                     {lastResult.total === 0 && (
                       <p className="text-xs text-[#8fb0e8] mt-1">לא נמצאו קבצים חדשים</p>
                     )}

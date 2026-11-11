@@ -24,7 +24,7 @@ import { fetchAllRows } from '@/lib/fetch-all-rows'
 import { findDuplicateDocument } from '@/lib/find-duplicate-document'
 import { documentIdentity, identityKey, normalizeTaxId } from '@/lib/doc-identity'
 import { duplicateAction } from '@/lib/doc-upgrade'
-import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
+import { upgradeAndSend } from '@/lib/upgrade-send'
 import { applyCreditNoteSign } from '@/lib/credit-note'
 import { withKeyLock } from '@/lib/key-lock'
 import { ownSendReason } from '@/lib/own-send'
@@ -171,6 +171,8 @@ interface ProcessResult {
   reason?: string
   /** A 'duplicate' that replaced the file and type of a stored RECEIPT with this tax invoice (src/lib/doc-upgrade.ts). */
   upgraded?: boolean
+  /** With `upgraded`: whether the tax invoice really went to the accountant (otherwise the next scan's drain sends it). */
+  sent?: boolean
 }
 
 interface ProgressSnapshot {
@@ -494,18 +496,20 @@ async function processAttachment(
             vendor_tax_id: extracted.vendor_tax_id,
           })
           if (existing) {
-            // Decision 1: a tax invoice for a document stored as a RECEIPT replaces that row's file and type.
+            // Decision 1: a tax invoice for a document stored as a RECEIPT replaces that row's file and type, and the tax
+            // invoice goes to the accountant (owner's decision of 2026-11-11, src/lib/upgrade-send.ts).
             if (duplicateAction(existing.doc_type, extracted.doc_type) === 'upgrade') {
-              const upgrade = await upgradeReceiptToTaxInvoice(supabase, existing.id, {
+              const upgrade = await upgradeAndSend(supabase, existing.id, {
                 file_url,
                 file_name: filename || `invoice_${Date.now()}.pdf`,
                 doc_type: extracted.doc_type,
+                vendor_tax_id: extracted.vendor_tax_id,
               })
               if (upgrade.upgraded) {
                 // The object uploaded above is the stored row's file now: it must stay, whatever happens next.
                 rowCreated = true
-                console.warn('[scan-gmail] receipt upgraded to a tax invoice:', existing.id)
-                return { status: 'duplicate', filename, vendor: extracted.vendor, upgraded: true }
+                console.warn('[scan-gmail] receipt upgraded to a tax invoice:', existing.id, upgrade.sent ? '(sent to the accountant)' : `(NOT sent: ${upgrade.sendNote})`)
+                return { status: 'duplicate', filename, vendor: extracted.vendor, upgraded: true, sent: upgrade.sent }
               }
               if (upgrade.reason === 'db_error') {
                 // The outcome is unknown (the update may have been committed): keep the uploaded object — a row may point at
@@ -577,31 +581,30 @@ async function processAttachment(
           return { status: 'error', filename }
         }
         rowCreated = true
+
+        // The send for the new row happens INSIDE this per-document lock (owner's decision of 2026-11-11 made the upgrade
+        // send mail too): a tax invoice for the same document waits on this key, so its upgrade — which clears the "sent"
+        // marker and sends the tax invoice — can never interleave with this send and have its outcome overwritten by it.
+        try {
+          // Awaited: fire-and-forget dropped the send silently when the process restarted (deploy) mid-scan.
+          await sendInvoiceToAccountant({
+            invoiceId: inserted.id,
+            fileUrl: file_url,
+            fileName: filename || null,
+            vendor: extracted.vendor,
+            date: extracted.date,
+            needsReview: Boolean(insertPayload.needs_review),
+          })
+        } catch (err) {
+          console.error('[scan-gmail] accountant send error:', err)
+        }
         return { insertedId: inserted.id, insertPayload }
       },
     )
     if ('status' in claimed) return claimed
-    const inserted = { id: claimed.insertedId }
-    const insertPayload = claimed.insertPayload
 
     if (vendor && extracted.category) {
       vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
-    }
-
-    const needsReview = Boolean(insertPayload.needs_review)
-    try {
-      // Awaited: fire-and-forget dropped the send silently when the process
-      // restarted (deploy) mid-scan.
-      await sendInvoiceToAccountant({
-        invoiceId: inserted.id,
-        fileUrl: file_url,
-        fileName: filename || null,
-        vendor: extracted.vendor,
-        date: extracted.date,
-        needsReview,
-      })
-    } catch (err) {
-      console.error('[scan-gmail] accountant send error:', err)
     }
 
     return { status: 'created', filename, vendor: extracted.vendor }

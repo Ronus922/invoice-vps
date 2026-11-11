@@ -84,3 +84,19 @@ export async function uploadFile(file: File): Promise<string> {
   const { file_url } = await res.json()
   return file_url
 }
+
+/** The file `uploadFile` stored got no row (a duplicate, a failed extraction, a failed save): ask the server to remove
+ *  it again (POST /api/upload/discard — only a fresh upload that no row points at is ever removed). Never throws and
+ *  never blocks the caller's own answer: a failure here leaves one orphan for scripts/delete-orphans.ts. */
+export async function discardUploadedFile(fileUrl: string | null | undefined, fetchImpl: typeof fetch = fetch): Promise<void> {
+  if (!fileUrl) return
+  try {
+    await fetchImpl('/api/upload/discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_url: fileUrl }),
+    })
+  } catch {
+    /* an orphan is cheaper than a failed scan */
+  }
+}

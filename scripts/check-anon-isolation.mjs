@@ -7,7 +7,7 @@
 // Read-only: it TRIES to read as anon and asserts it gets nothing.
 import { run, fail, ok, info } from './_lib.mjs'
 
-const SENSITIVE = ['invoices', 'gmail_tokens', 'scanned_emails']
+const SENSITIVE = ['invoices', 'gmail_tokens', 'scanned_emails', 'folder_duplicate_hashes']
 
 run('check-anon-isolation', async () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL

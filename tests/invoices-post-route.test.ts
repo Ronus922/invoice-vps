@@ -8,6 +8,9 @@ import { fake, type Row } from './fake-postgrest'
 // one the unique index always gave: 200 { duplicate: true } and no row.
 
 const auth = vi.hoisted(() => ({ user: { id: 'u1' } as { id: string } | null }))
+// The e-mail to the accountant after an upgrade (src/lib/upgrade-send.ts imports it lazily) — never really sent from a test.
+const sender = vi.hoisted(() => ({ send: vi.fn<(input: unknown) => Promise<{ sent: boolean; reason?: string; error?: string }>>(async () => ({ sent: true })) }))
+vi.mock('@/lib/accountant-send', () => ({ sendInvoiceToAccountant: (input: unknown) => sender.send(input) }))
 
 vi.mock('@supabase/supabase-js', async () => {
   const { fakeClient } = await import('./fake-postgrest')
@@ -135,12 +138,14 @@ describe('POST /api/invoices — a tax invoice upgrades a stored receipt', () =>
   beforeEach(() => {
     fake.reset({ invoices: [{ ...RECEIPT_ROW }] })
     auth.user = { id: 'u1' }
+    sender.send.mockClear()
+    sender.send.mockImplementation(async () => ({ sent: true }))
   })
 
-  it('invoice over receipt: 200 { duplicate, upgraded, existing_id }, no new row, the stored row takes the invoice file and type', async () => {
+  it('invoice over receipt: 200 { duplicate, upgraded, existing_id, sent }, no new row, the stored row takes the invoice file and type', async () => {
     const res = await post(INVOICE_IN)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ duplicate: true, upgraded: true, existing_id: 'receipt-row-01' })
+    expect(await res.json()).toEqual({ duplicate: true, upgraded: true, existing_id: 'receipt-row-01', sent: true, send_note: null })
     expect(fake.inserted).toHaveLength(0)
     expect(fake.updates).toHaveLength(1)
     expect(fake.updates[0]!.values).toMatchObject({ file_url: INVOICE_IN.file_url, file_name: 'Invoice-1OGZD2JL-0009.pdf', doc_type: 'invoice' })
@@ -149,9 +154,41 @@ describe('POST /api/invoices — a tax invoice upgrades a stored receipt', () =>
     expect([stored.doc_type, stored.file_url]).toEqual(['invoice', INVOICE_IN.file_url])
   })
 
-  it('nothing else on the stored row changes: vendor, number, date, total, source, sent flags are not in the update', async () => {
+  it('the update carries only the new file and type plus the cleared "sent" / Drive markers — vendor, number, date, total, source are not in it', async () => {
     await post(INVOICE_IN)
-    expect(Object.keys(fake.updates[0]!.values).sort()).toEqual(['doc_type', 'file_name', 'file_url', 'updated_at'])
+    expect(Object.keys(fake.updates[0]!.values).sort()).toEqual([
+      'accountant_send_error', 'backed_up_to_drive_at', 'doc_type', 'drive_backup_error', 'drive_file_id', 'file_name', 'file_url', 'sent_to_accountant_at', 'updated_at',
+    ])
+    expect(fake.updates[0]!.values).toMatchObject({ sent_to_accountant_at: null, backed_up_to_drive_at: null, drive_file_id: null })
+  })
+
+  it('the TAX INVOICE is sent to the accountant — the new file, for the stored row\'s vendor and date — and the answer says so', async () => {
+    await post(INVOICE_IN)
+    expect(sender.send).toHaveBeenCalledTimes(1)
+    expect(sender.send).toHaveBeenCalledWith({
+      invoiceId: 'receipt-row-01', fileUrl: INVOICE_IN.file_url, fileName: 'Invoice-1OGZD2JL-0009.pdf', vendor: 'Anthropic, PBC', date: '04/06/2026', needsReview: false,
+    })
+  })
+
+  it('the send did not happen (no accountant e-mail, Gmail not connected, …): still 200 upgraded — with sent:false and the reason, never "sent"', async () => {
+    sender.send.mockImplementation(async () => ({ sent: false, reason: 'no_accountant_email' }))
+    const res = await post(INVOICE_IN)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ duplicate: true, upgraded: true, existing_id: 'receipt-row-01', sent: false, send_note: 'no_accountant_email' })
+    fake.reset({ invoices: [{ ...RECEIPT_ROW }] }) // the first post upgraded the stored row — start from a receipt again
+    sender.send.mockImplementation(async () => { throw new Error('boom') })
+    expect(await (await post(INVOICE_IN)).json()).toMatchObject({ upgraded: true, sent: false })
+  })
+
+  it('nothing is sent when nothing was upgraded (a plain duplicate, a lost race, a database error)', async () => {
+    await post({ ...INVOICE_IN, doc_type: 'receipt' })
+    fake.reset({ invoices: [{ ...RECEIPT_ROW }] })
+    fake.updateError = { message: 'duplicate key', code: '23505' }
+    await post(INVOICE_IN)
+    fake.reset({ invoices: [{ ...RECEIPT_ROW }] })
+    fake.updateError = { message: 'connection reset', code: 'XX000' }
+    await post(INVOICE_IN)
+    expect(sender.send).not.toHaveBeenCalled()
   })
 
   it('a tax invoice/receipt upgrades too', async () => {
@@ -330,5 +367,104 @@ describe('PATCH /api/invoices — the identity index refuses an edit that would 
   it('any other database error stays a 500', async () => {
     fake.updateError = { message: 'boom', code: 'XX000' }
     expect((await patch({ id: 'row-1', doc_number: '6' })).status).toBe(500)
+  })
+})
+
+// Owner's decision of 2026-11-11: a file that was uploaded and got no row is removed again. The browser uploads BEFORE
+// it knows whether the document becomes a row; the server removes the object whenever it answers "no row" — and never an
+// object a row points at.
+describe('POST /api/invoices — the uploaded file of a document that got no row is removed again', () => {
+  const UUID_A = 'ec4bfa54-f75c-4ab6-82c0-903883aeaf14'
+  const UPLOADED = `https://x/storage/v1/object/public/invoice-files/invoices/${UUID_A}.pdf`
+  const UPLOADED_PATH = `invoices/${UUID_A}.pdf`
+  const STORED_RECEIPT: Row = {
+    id: 'receipt-row-01', vendor: 'Anthropic, PBC', doc_number: '1OGZD2JL-0009', doc_type: 'receipt', date: '04/06/2026',
+    total: 100, currency: 'USD', source: 'folder', created_at: '2026-06-05T10:00:00Z', vendor_tax_id: null,
+    file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.pdf', file_name: 'Receipt.pdf',
+  }
+  const INCOMING = {
+    vendor: 'Anthropic, PBC', doc_number: '1OGZD2JL-0009', doc_type: 'receipt', date: '04/06/2026', total: 100, currency: 'USD',
+    source: 'folder', file_url: UPLOADED, file_name: 'copy.pdf',
+  }
+
+  beforeEach(() => {
+    fake.reset({ invoices: [{ ...STORED_RECEIPT }] })
+    auth.user = { id: 'u1' }
+    sender.send.mockClear()
+    sender.send.mockImplementation(async () => ({ sent: true }))
+  })
+
+  it('a plain duplicate: the answer is unchanged and the object uploaded for the copy is removed', async () => {
+    const res = await post(INCOMING)
+    expect(await res.json()).toEqual({ duplicate: true, existing_id: 'receipt-row-01' })
+    expect(fake.removedObjects).toEqual([UPLOADED_PATH])
+  })
+
+  it('a duplicate that arrives with the file_url of the EXISTING row (a client re-sending a stored document) removes nothing', async () => {
+    const res = await post({ ...INCOMING, file_url: STORED_RECEIPT.file_url })
+    expect(await res.json()).toEqual({ duplicate: true, existing_id: 'receipt-row-01' })
+    expect(fake.removedObjects).toEqual([])
+  })
+
+  it('an upgrade KEEPS the uploaded object — it is the row\'s file now', async () => {
+    const res = await post({ ...INCOMING, doc_type: 'invoice' })
+    expect(await res.json()).toMatchObject({ upgraded: true })
+    expect(fake.removedObjects).toEqual([])
+  })
+
+  it('an upgrade that was not applied (a lost race / the unique index) is a duplicate that names no row — and the object is removed', async () => {
+    fake.updateError = { message: 'duplicate key', code: '23505' }
+    const res = await post({ ...INCOMING, doc_type: 'invoice' })
+    expect(await res.json()).toEqual({ duplicate: true })
+    expect(fake.removedObjects).toEqual([UPLOADED_PATH])
+  })
+
+  it('a database error during the upgrade KEEPS the object (the update may have been committed) and answers 500', async () => {
+    fake.updateError = { message: 'connection reset', code: 'XX000' }
+    const res = await post({ ...INCOMING, doc_type: 'invoice' })
+    expect(res.status).toBe(500)
+    expect(fake.removedObjects).toEqual([])
+  })
+
+  it('the unique index rejects the insert (a race the lookup could not see): the answer is a duplicate and the object is removed', async () => {
+    fake.reset({ invoices: [] })
+    fake.insertError = { message: 'duplicate key', code: '23505' }
+    const res = await post({ ...INCOMING, doc_number: 'NEW-1' })
+    expect(await res.json()).toEqual({ duplicate: true })
+    expect(fake.removedObjects).toEqual([UPLOADED_PATH])
+  })
+
+  it('any other insert failure answers 500 and removes the object — no row will ever point at it', async () => {
+    fake.reset({ invoices: [] })
+    fake.insertError = { message: 'boom', code: 'XX000' }
+    const res = await post({ ...INCOMING, doc_number: 'NEW-1' })
+    expect(res.status).toBe(500)
+    expect(fake.removedObjects).toEqual([UPLOADED_PATH])
+  })
+
+  it('a document that becomes a row keeps its file', async () => {
+    fake.reset({ invoices: [] })
+    const res = await post({ ...INCOMING, doc_number: 'NEW-1' })
+    expect(((await res.json()) as Record<string, unknown>).duplicate).toBeUndefined()
+    expect(fake.inserted).toHaveLength(1)
+    expect(fake.removedObjects).toEqual([])
+  })
+
+  it('a file_url that is not a fresh upload (an external URL, a Gmail object) is never touched', async () => {
+    for (const file_url of ['https://base44.app/x.pdf', 'https://x/storage/v1/object/public/invoice-files/invoices/gmail_1_67016238-4620-4d84-b32d-caa951820a5e.pdf']) {
+      fake.reset({ invoices: [{ ...STORED_RECEIPT }] })
+      await post({ ...INCOMING, file_url })
+      expect(fake.removedObjects, file_url).toEqual([])
+    }
+  })
+
+  it('a tax id that differs from the stored receipt\'s is another issuer: no upgrade, nothing is sent, and the object is removed when the unique index refuses the row', async () => {
+    fake.reset({ invoices: [{ ...STORED_RECEIPT, vendor_tax_id: '512345678' }] })
+    fake.insertError = { message: 'duplicate key', code: '23505' }
+    const res = await post({ ...INCOMING, doc_type: 'invoice', vendor_tax_id: '515456002' })
+    expect(await res.json()).toEqual({ duplicate: true })
+    expect(fake.updates).toHaveLength(0)
+    expect(sender.send).not.toHaveBeenCalled()
+    expect(fake.removedObjects).toEqual([UPLOADED_PATH])
   })
 })
