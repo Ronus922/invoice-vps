@@ -30,7 +30,7 @@ function fakeStore(over: Partial<{ existing: DuplicateInfo | null; existingAfter
   const log: string[] = []
   let lookups = 0
   const inserted: Record<string, unknown>[] = []
-  const upgrades: { id: string; input: { fileUrl: string; fileName: string; docType: string } }[] = []
+  const upgrades: { id: string; input: { fileUrl: string; fileName: string; docType: string; vendorTaxId: string | null } }[] = []
   const store: ScanStore = {
     async findDuplicate() {
       log.push('find')
@@ -52,7 +52,7 @@ function fakeStore(over: Partial<{ existing: DuplicateInfo | null; existingAfter
       log.push('upgrade')
       if (over.upgradeThrows) throw new Error('db down')
       upgrades.push({ id, input })
-      return over.upgrade ?? { ok: true, row: { id, doc_type: input.docType, file_url: input.fileUrl } }
+      return over.upgrade ?? { ok: true, row: { id, doc_type: input.docType, file_url: input.fileUrl }, sent: true, sendNote: null }
     },
   }
   return { store, log, inserted, upgrades }
@@ -246,7 +246,7 @@ describe('a scanned tax invoice upgrades a stored receipt of the same transactio
   it('invoice over a receipt: the photo is stored and the EXISTING row takes it and the type — nothing is inserted', async () => {
     const { store, log, inserted, upgrades } = fakeStore({ existing: EXISTING }) // EXISTING is a receipt
     const res = await run(store, data({ doc_type: 'invoice' }))
-    expect(res).toEqual({ kind: 'upgraded', invoice: { id: EXISTING.id, doc_type: 'invoice', file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/abc.jpg' } })
+    expect(res).toEqual({ kind: 'upgraded', invoice: { id: EXISTING.id, doc_type: 'invoice', file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/abc.jpg' }, sent: true, sendNote: null })
     expect(log).toEqual(['find', 'upload', 'upgrade']) // no insert, no photo removal
     expect(inserted).toHaveLength(0)
     expect(upgrades).toHaveLength(1)
@@ -254,6 +254,22 @@ describe('a scanned tax invoice upgrades a stored receipt of the same transactio
     expect(upgrades[0]!.input.docType).toBe('invoice')
     expect(upgrades[0]!.input.fileUrl).toMatch(/invoices\/abc\.jpg$/)
     expect(upgrades[0]!.input.fileName).toMatch(/\.jpg$/)
+  })
+
+  it('the tax id the scan read is handed to the upgrade (the rule "same issuer or no upgrade" lives there)', async () => {
+    const { store, upgrades } = fakeStore({ existing: EXISTING })
+    await run(store, data({ doc_type: 'invoice', vendor_tax_id: '512345678' }))
+    expect(upgrades[0]!.input.vendorTaxId).toBe('512345678')
+    const none = fakeStore({ existing: EXISTING })
+    await run(none.store, data({ doc_type: 'invoice', vendor_tax_id: '' }))
+    expect(none.upgrades[0]!.input.vendorTaxId).toBeNull()
+  })
+
+  it('whether the tax invoice REALLY went to the accountant travels with the result — the screen says "sent" only from this', async () => {
+    const sent = fakeStore({ existing: EXISTING, upgrade: { ok: true, row: { id: EXISTING.id }, sent: true, sendNote: null } })
+    expect(await run(sent.store, data({ doc_type: 'invoice' }))).toMatchObject({ kind: 'upgraded', sent: true, sendNote: null })
+    const notSent = fakeStore({ existing: EXISTING, upgrade: { ok: true, row: { id: EXISTING.id }, sent: false, sendNote: 'gmail_not_connected' } })
+    expect(await run(notSent.store, data({ doc_type: 'invoice' }))).toMatchObject({ kind: 'upgraded', sent: false, sendNote: 'gmail_not_connected' })
   })
 
   it('a tax invoice/receipt upgrades too', async () => {

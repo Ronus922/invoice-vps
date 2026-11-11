@@ -11,7 +11,8 @@ import { fetchAllRows } from '@/lib/fetch-all-rows'
 import { findDuplicateDocument } from '@/lib/find-duplicate-document'
 import { normalizeTaxId } from '@/lib/doc-identity'
 import { duplicateAction } from '@/lib/doc-upgrade'
-import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
+import { upgradeAndSend } from '@/lib/upgrade-send'
+import { discardUnreferencedUpload } from '@/lib/discard-upload'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -168,29 +169,39 @@ export async function POST(request: NextRequest) {
     const existing = await findDuplicateDocument(supabase, payload)
     if (existing) {
       // Decision 1: a tax invoice for a document stored as a RECEIPT replaces that row's file and type — the one row
-      // of the transaction. Anything else (a receipt after a tax invoice, the same type twice) is a plain duplicate.
+      // of the transaction — and the tax invoice is sent to the accountant (owner's decision of 2026-11-11, src/lib/upgrade-send.ts).
+      // Anything else (a receipt after a tax invoice, the same type twice) is a plain duplicate.
       if (duplicateAction(existing.doc_type, payload.doc_type) === 'upgrade') {
-        const upgrade = await upgradeReceiptToTaxInvoice(supabase, existing.id, {
+        const upgrade = await upgradeAndSend(supabase, existing.id, {
           file_url: (payload.file_url as string | null | undefined) ?? null,
           file_name: (payload.file_name as string | null | undefined) ?? null,
           doc_type: payload.doc_type,
+          vendor_tax_id: (payload.vendor_tax_id as string | null | undefined) ?? null,
         })
         if (upgrade.upgraded) {
           console.warn('[invoices POST] receipt upgraded to a tax invoice:', existing.id)
-          return NextResponse.json({ duplicate: true, upgraded: true, existing_id: existing.id }, { status: 200 })
+          // `sent` is true only when the e-mail to the accountant really left — the screens say "sent" from this.
+          return NextResponse.json(
+            { duplicate: true, upgraded: true, existing_id: existing.id, sent: upgrade.sent, send_note: upgrade.sendNote },
+            { status: 200 },
+          )
         }
         // A database error leaves the outcome unknown (the update may have been committed): answer an error — never "duplicate" —
-        // so the caller keeps its file and tries again.
+        // so the caller keeps its file and tries again. The uploaded object is NOT discarded: a row may point at it.
         if (upgrade.reason === 'db_error') {
           console.error('[invoices POST] receipt upgrade failed (db error) for', existing.id)
           return NextResponse.json({ error: 'שדרוג הקבלה לחשבונית מס נכשל — נסה שוב' }, { status: 500 })
         }
-        // Conclusively not upgraded (the row changed, a conflict). Say nothing about the existing row: with no existing_id
-        // the folder scan keeps its source file — which is now the only copy of this tax invoice.
+        // Conclusively not upgraded (the row changed, a conflict, another issuer's tax id). Say nothing about the existing
+        // row: with no existing_id the folder scan keeps its source file — which is now the only copy of this tax invoice.
+        // The uploaded object has no row: it is removed again (owner's decision of 2026-11-11).
         console.warn('[invoices POST] upgrade not applied (%s) — duplicate of %s, source file not confirmed', upgrade.reason, existing.id)
+        await discardUnreferencedUpload(supabase, payload.file_url)
         return NextResponse.json({ duplicate: true }, { status: 200 })
       }
       console.warn('[invoices POST] duplicate skipped: same document as', existing.id)
+      // The document is already stored: the object that was uploaded for this copy has no row and is removed again.
+      await discardUnreferencedUpload(supabase, payload.file_url)
       return NextResponse.json({ duplicate: true, existing_id: existing.id }, { status: 200 })
     }
   } catch (err) {
@@ -230,9 +241,13 @@ export async function POST(request: NextRequest) {
       } catch {
         /* no id: the caller keeps its source file */
       }
+      // No row was created: the object uploaded for this copy is removed again (owner's decision of 2026-11-11).
+      await discardUnreferencedUpload(supabase, payload.file_url)
       return NextResponse.json({ duplicate: true, ...(existingId ? { existing_id: existingId } : {}) }, { status: 200 })
     }
     console.error('[invoices POST] supabase error:', error)
+    // The insert failed, so no row points at the uploaded object: it is removed again (a client that retries uploads anew).
+    await discardUnreferencedUpload(supabase, payload.file_url)
     return NextResponse.json(
       { error: `יצירת חשבונית נכשלה — ${error.message}` },
       { status: 500 }

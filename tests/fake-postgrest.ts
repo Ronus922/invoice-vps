@@ -37,6 +37,16 @@ export const fake = {
   updates: [] as Array<{ values: Record<string, unknown>; filters: string[] }>,
   /** When set, every update fails with this error (e.g. { code: '23505' }). */
   updateError: null as { message: string; code?: string } | null,
+  /** Object paths removed through `storage.from(bucket).remove([...])`, in order. */
+  removedObjects: [] as string[],
+  /** When set, every storage remove fails with this error. */
+  storageError: null as { message: string } | null,
+  /** Storage listing (`storage.from(b).list(folder, { search })`): every object is "there" and this old (ms) — null = no created_at. */
+  objectAgeMs: 0 as number | null,
+  /** Object names the listing does not find (already removed). */
+  missingObjects: [] as string[],
+  /** When set, every storage listing fails with this error. */
+  listError: null as { message: string } | null,
   requests: 0,
   reset(tables: Record<string, Row[]> = {}) {
     this.tables = new Map(Object.entries(tables))
@@ -47,6 +57,11 @@ export const fake = {
     this.inserted = []
     this.updates = []
     this.updateError = null
+    this.removedObjects = []
+    this.storageError = null
+    this.objectAgeMs = 0
+    this.missingObjects = []
+    this.listError = null
     this.requests = 0
   },
 }
@@ -54,6 +69,7 @@ export const fake = {
 class Query implements PromiseLike<Result> {
   private orders: Array<{ field: string; asc: boolean }> = []
   private filters: string[] = []
+  private likes: Array<[string, string]> = []
   private window: { from: number; to: number } | null = null
   private toInsert: Record<string, unknown> | null = null
   private toUpdate: Record<string, unknown> | null = null
@@ -66,6 +82,16 @@ class Query implements PromiseLike<Result> {
   is() { return this }
   eq(field: string, value: unknown) {
     this.filters.push(`${field}=${String(value)}`)
+    return this
+  }
+  /** `.like(column, pattern)` — applied to plain selects (only `%` is a wildcard; the paths it is used with hold no `_`). */
+  like(field: string, pattern: string) {
+    this.filters.push(`${field} like ${pattern}`)
+    this.likes.push([field, pattern])
+    return this
+  }
+  in(field: string, values: unknown[]) {
+    this.filters.push(`${field} in ${values.map(String).join(',')}`)
     return this
   }
   gte(field: string, value: unknown) {
@@ -146,7 +172,8 @@ class Query implements PromiseLike<Result> {
       return one ? { data: one, error: null } : { data: null, error: { message: 'no rows', code: 'PGRST116' } }
     }
 
-    const stored = fake.tables.get(this.table) ?? []
+    const likeRegexes = this.likes.map(([f, p]) => [f, new RegExp(`^${p.split('%').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)] as const)
+    const stored = (fake.tables.get(this.table) ?? []).filter((r) => likeRegexes.every(([f, re]) => re.test(String(r[f] ?? ''))))
     const base = n % 2 === 0 ? stored.slice().reverse() : stored.slice() // the unspecified tie order
     const sorted = base.sort((a, b) => {
       for (const { field, asc } of this.orders) {
@@ -167,4 +194,20 @@ class Query implements PromiseLike<Result> {
 
 export const fakeClient = {
   from: (table: string) => new Query(table),
+  storage: {
+    from: () => ({
+      list: async (_folder: string, options?: { search?: string }) => {
+        if (fake.listError) return { data: null, error: fake.listError }
+        const name = options?.search ?? ''
+        if (fake.missingObjects.includes(name)) return { data: [], error: null }
+        const created_at = fake.objectAgeMs === null ? null : new Date(Date.now() - fake.objectAgeMs).toISOString()
+        return { data: [{ name, created_at, metadata: { size: 1000 } }], error: null }
+      },
+      remove: async (paths: string[]) => {
+        if (fake.storageError) return { data: null, error: fake.storageError }
+        fake.removedObjects.push(...paths)
+        return { data: paths.map((name) => ({ name })), error: null }
+      },
+    }),
+  },
 }

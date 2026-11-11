@@ -59,7 +59,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ invoice: result.invoice }, { status: 201, headers: { 'Cache-Control': 'private, no-store' } })
     case 'upgraded':
       // Decision 1: the stored receipt of this transaction took this scan's photo and type — 200, not 201: no row was created.
-      return NextResponse.json({ invoice: result.invoice, upgraded: true }, { status: 200, headers: { 'Cache-Control': 'private, no-store' } })
+      // `sent` is true only when the tax invoice really went to the accountant: the screen says "sent" from this alone.
+      return NextResponse.json(
+        { invoice: result.invoice, upgraded: true, sent: result.sent, send_note: result.sendNote },
+        { status: 200, headers: { 'Cache-Control': 'private, no-store' } },
+      )
     case 'duplicate':
       return NextResponse.json(
         { error: 'המסמך כבר קיים במערכת', duplicate: true, existing: result.existing },

@@ -33,7 +33,7 @@ interface SavedState {
   currency: string
   needsReview: boolean
   reviewReason: string | null
-  sent: boolean | null // null = not attempted (needs review, or an upgrade)
+  sent: boolean | null // null = not attempted (needs review); for an upgrade: whether the tax invoice really went out
   sendNote: string
   /** Decision 1: this scan was a tax invoice and the stored receipt of the same transaction took its photo and type. */
   upgraded: boolean
@@ -209,6 +209,8 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
         existing?: DuplicateInfo | null
         invoice?: Record<string, unknown>
         upgraded?: boolean
+        sent?: boolean
+        send_note?: string | null
       }
       if (r.status === 409 && data.duplicate) {
         setDuplicate(data.existing ?? null)
@@ -223,9 +225,12 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
       if (values.vendor && passthrough.category) rememberVendorCategory(values.vendor, passthrough.category)
       let sent: boolean | null = null
       let sendNote = ''
-      // An upgrade sends nothing: the accountant already has the receipt of this row, and whether he also gets the tax
-      // invoice is the owner's call (docs/document-identity.md) — the same as the Gmail, upload and folder roads.
-      if (!needsReview && !upgraded) {
+      if (upgraded) {
+        // The server sent the tax invoice itself (owner's decision of 2026-11-11, src/lib/upgrade-send.ts): "sent" is shown
+        // only when it says an e-mail really left — never on the strength of the upgrade alone.
+        sent = data.sent === true
+        if (!sent) sendNote = data.send_note ?? ''
+      } else if (!needsReview) {
         // Same call, same contract as UploadZone: 200 + sent:true = delivered; check `sent`, not res.ok.
         try {
           const sendRes = await fetch('/api/send-to-accountant', {
@@ -459,9 +464,16 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
                 {saved.vendor || 'ללא שם ספק'} · מס׳ {saved.docNumber || '—'} · {formatCurrency(saved.total, saved.currency)}
               </p>
               {saved.upgraded ? (
-                <p className="m-0 text-sm" data-testid="scan-upgraded" style={{ color: 'var(--accent)' }}>
-                  הצילום והסוג של הקבלה הקיימת עודכנו — לא נוצרה שורה חדשה ולא נשלח דבר לרואה החשבון.
-                </p>
+                saved.sent ? (
+                  <p className="m-0 text-sm" data-testid="scan-upgraded" style={{ color: 'var(--accent)' }}>
+                    הצילום והסוג של הקבלה הקיימת עודכנו — לא נוצרה שורה חדשה. חשבונית המס נשלחה לרואה החשבון.
+                  </p>
+                ) : (
+                  <p className="m-0 text-sm text-amber-300" data-testid="scan-upgraded">
+                    הצילום והסוג של הקבלה הקיימת עודכנו — לא נוצרה שורה חדשה, אבל חשבונית המס לא נשלחה לרואה החשבון
+                    {saved.needsReview ? ' (השורה מסומנת לבדיקה)' : ` — ${sendFailureText(saved.sendNote)}`}. היא תופיע בבאנר „חשבוניות לא נשלחו” ותישלח משם.
+                  </p>
+                )
               ) : saved.needsReview ? (
                 <p className="m-0 text-sm text-amber-300">
                   סומנה לבדיקה{saved.reviewReason ? `: ${saved.reviewReason}` : ''} — לא נשלחה לרואה החשבון. אפשר לתקן אותה בטבלת החשבוניות.

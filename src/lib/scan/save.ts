@@ -27,7 +27,7 @@ import type { ScanSaveData } from './validation'
 
 export type SaveResult =
   | { kind: 'saved'; invoice: Record<string, unknown> }
-  | { kind: 'upgraded'; invoice: Record<string, unknown> }
+  | { kind: 'upgraded'; invoice: Record<string, unknown>; sent: boolean; sendNote: string | null }
   | { kind: 'duplicate'; existing: DuplicateInfo | null }
   | { kind: 'bad_image'; error: ScanImageError }
   | { kind: 'failed'; stage: 'lookup' | 'upload' | 'insert' }
@@ -85,18 +85,18 @@ export async function saveScannedReceipt(store: ScanStore, input: SaveInput): Pr
   if (existing && upgrading) {
     let upgraded
     try {
-      upgraded = await store.upgradeInvoice(existing.id, { fileUrl: stored.fileUrl, fileName, docType })
+      upgraded = await store.upgradeInvoice(existing.id, { fileUrl: stored.fileUrl, fileName, docType, vendorTaxId: data.vendor_tax_id || null })
     } catch {
       // The outcome is unknown (the update may have been committed): the photo may be the row's file now — keep it.
       return { kind: 'failed', stage: 'insert' }
     }
     if (!upgraded.ok) {
       if (upgraded.inconclusive) return { kind: 'failed', stage: 'insert' } // a database error: keep the photo, ask to retry
-      // The row stopped being a receipt in the meantime: the photo is an orphan, and the scan is a duplicate.
+      // The row stopped being a receipt in the meantime (or another issuer's tax id): the photo is an orphan, and the scan is a duplicate.
       await store.removePhoto(stored.path)
       return { kind: 'duplicate', existing }
     }
-    return { kind: 'upgraded', invoice: upgraded.row }
+    return { kind: 'upgraded', invoice: upgraded.row, sent: upgraded.sent, sendNote: upgraded.sendNote }
   }
 
   // 3 — the row.

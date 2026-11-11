@@ -37,6 +37,9 @@ export interface DuplicateResult {
   duplicate: true
   existing_id?: string
   upgraded?: boolean
+  /** With `upgraded`: true only when the tax invoice really went to the accountant (src/lib/upgrade-send.ts). */
+  sent?: boolean
+  send_note?: string | null
 }
 
 export interface ExtractionRaw {

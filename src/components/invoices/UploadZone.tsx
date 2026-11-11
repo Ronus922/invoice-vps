@@ -12,7 +12,7 @@ import {
   FolderOpen,
 } from 'lucide-react'
 import { InvoiceEntity, type Invoice } from '@/lib/entities'
-import { uploadFile } from '@/lib/upload'
+import { uploadFile, discardUploadedFile } from '@/lib/upload'
 import {
   applyRememberedCategory,
   rememberVendorCategory,
@@ -73,8 +73,13 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           return next
         })
 
+        // The file is stored BEFORE the document is read: every exit that ends without a row removes it again
+        // (owner's decision of 2026-11-11). `rowKept` = a row (or an upgraded row) now points at it.
+        let uploadedUrl: string | null = null
+        let rowKept = false
         try {
           const fileUrl = await uploadFile(item.file)
+          uploadedUrl = fileUrl
 
           const res = await fetch('/api/extract-invoice', {
             method: 'POST',
@@ -84,6 +89,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
 
           if (!res.ok) {
             const errData = await res.json()
+            await discardUploadedFile(fileUrl)
             setQueue((prev) =>
               prev.map((q) =>
                 q === item || (q.name === item.name && q.status === 'processing')
@@ -104,6 +110,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           const match = findDuplicateInList(existingRef.current, extracted)
           const isDuplicate = match !== null && duplicateAction(match.doc_type, docType) === 'skip'
           if (isDuplicate) {
+            await discardUploadedFile(fileUrl)
             setQueue((prev) =>
               prev.map((q) =>
                 q === item || (q.name === item.name && q.status === 'processing')
@@ -123,12 +130,20 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           })
 
           if (created && 'duplicate' in created && created.upgraded) {
-            // The stored receipt of this transaction took this tax invoice's file and type (src/lib/doc-upgrade.ts).
+            // The stored receipt of this transaction took this tax invoice's file and type (src/lib/doc-upgrade.ts), and
+            // the server sent the tax invoice to the accountant: "נשלחה" is shown only when it says an e-mail really left.
+            rowKept = true
             onInvoiceExtracted()
             setQueue((prev) =>
               prev.map((q) =>
                 q === item || (q.name === item.name && q.status === 'processing')
-                  ? { ...q, status: 'done', message: 'הקבלה הקיימת שודרגה לחשבונית מס' }
+                  ? {
+                      ...q,
+                      status: 'done',
+                      message: created.sent === true
+                        ? 'הקבלה הקיימת שודרגה לחשבונית מס ונשלחה לרו"ח'
+                        : 'הקבלה הקיימת שודרגה לחשבונית מס — לא נשלחה לרו"ח',
+                    }
                   : q
               )
             )
@@ -136,7 +151,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
           }
 
           if (created && 'duplicate' in created) {
-            // The server's dedup caught a duplicate the snapshot missed.
+            // The server's dedup caught a duplicate the snapshot missed (and removed the uploaded copy itself).
             setQueue((prev) =>
               prev.map((q) =>
                 q === item || (q.name === item.name && q.status === 'processing')
@@ -147,6 +162,7 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             continue
           }
 
+          rowKept = true
           if (extracted.vendor && extracted.category) {
             rememberVendorCategory(extracted.vendor, extracted.category)
           }
@@ -205,6 +221,9 @@ export default function UploadZone({ onInvoiceExtracted, existingInvoices = [] }
             onInvoiceExtracted()
           }
         } catch (err) {
+          // No row: remove the uploaded copy. A failed save whose answer was lost may still have committed — the server
+          // never removes an object a row points at, so that case keeps its file.
+          if (uploadedUrl && !rowKept) await discardUploadedFile(uploadedUrl)
           const message = err instanceof Error ? err.message : 'שגיאה לא ידועה'
           setQueue((prev) =>
             prev.map((q) =>

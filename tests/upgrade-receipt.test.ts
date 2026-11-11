@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { upgradeReceiptToTaxInvoice } from '@/lib/upgrade-receipt'
 import { fake, fakeClient, type Row } from './fake-postgrest'
 
-// The server half of Decision 1: the stored RECEIPT takes the tax invoice's file and doc_type — guarded, minimal, and
-// without deleting the receipt's old file.
+// The server half of Decision 1: the stored RECEIPT takes the tax invoice's file and doc_type — guarded, and without
+// deleting the receipt's old file. Owner's decision of 2026-11-11: the swap also clears the "sent to the accountant" and
+// "backed up to Drive" markers (the receipt's), so the TAX INVOICE is what gets sent and backed up; and a tax id known on
+// both sides must be the same.
 
 const RECEIPT: Row = {
   id: 'r1', vendor: 'Anthropic, PBC', doc_number: '1OGZD2JL-0009', doc_type: 'receipt', date: '04/06/2026', total: 100, currency: 'USD',
   file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/receipt.pdf', file_name: 'Receipt.pdf', sent_to_accountant_at: '2026-06-05T10:00:00Z',
-  backed_up_to_drive_at: '2026-06-06T10:00:00Z', category: 'ענן',
+  backed_up_to_drive_at: '2026-06-06T10:00:00Z', drive_file_id: 'drive-receipt-1', drive_backup_error: null, accountant_send_error: null,
+  category: 'ענן', needs_review: 0, vendor_tax_id: null,
 }
 const NEW = { file_url: 'https://x/storage/v1/object/public/invoice-files/invoices/invoice.pdf', file_name: 'Invoice.pdf', doc_type: 'invoice' }
 const db = fakeClient as unknown as Parameters<typeof upgradeReceiptToTaxInvoice>[0]
@@ -17,18 +20,46 @@ beforeEach(() => fake.reset({ invoices: [{ ...RECEIPT }] }))
 
 describe('upgradeReceiptToTaxInvoice', () => {
   it('swaps file_url, file_name and doc_type — and reports the replaced file, which it does not delete', async () => {
-    expect(await upgradeReceiptToTaxInvoice(db, 'r1', NEW)).toEqual({ upgraded: true, replacedFileUrl: RECEIPT.file_url })
+    expect(await upgradeReceiptToTaxInvoice(db, 'r1', NEW)).toMatchObject({ upgraded: true, replacedFileUrl: RECEIPT.file_url })
     const row = fake.tables.get('invoices')![0]!
     expect([row.file_url, row.file_name, row.doc_type]).toEqual([NEW.file_url, 'Invoice.pdf', 'invoice'])
   })
 
-  it('touches nothing else: vendor, number, date, total, category, the sent and Drive-backup flags keep their values', async () => {
+  it('keeps vendor, number, date, total, currency and category — the document itself is the same', async () => {
     await upgradeReceiptToTaxInvoice(db, 'r1', NEW)
     const row = fake.tables.get('invoices')![0]!
-    for (const k of ['vendor', 'doc_number', 'date', 'total', 'currency', 'category', 'sent_to_accountant_at', 'backed_up_to_drive_at'] as const) {
+    for (const k of ['vendor', 'doc_number', 'date', 'total', 'currency', 'category'] as const) {
       expect(row[k], k).toBe(RECEIPT[k])
     }
-    expect(Object.keys(fake.updates[0]!.values).sort()).toEqual(['doc_type', 'file_name', 'file_url', 'updated_at'])
+  })
+
+  it('clears the "sent to the accountant" markers: the row is NOT sent again until the tax invoice really is', async () => {
+    await upgradeReceiptToTaxInvoice(db, 'r1', NEW)
+    const row = fake.tables.get('invoices')![0]!
+    expect(row.sent_to_accountant_at).toBeNull()
+    expect(row.accountant_send_error).toBeNull()
+  })
+
+  it('clears ALL the Drive markers — including drive_file_id, which the backup job treats as "already uploaded" — so the tax invoice is backed up', async () => {
+    await upgradeReceiptToTaxInvoice(db, 'r1', NEW)
+    const row = fake.tables.get('invoices')![0]!
+    expect(row.backed_up_to_drive_at).toBeNull()
+    expect(row.drive_file_id).toBeNull()
+    expect(row.drive_backup_error).toBeNull()
+  })
+
+  it('the update carries exactly: the new file and type, the cleared markers, updated_at — nothing else', async () => {
+    await upgradeReceiptToTaxInvoice(db, 'r1', NEW)
+    expect(Object.keys(fake.updates[0]!.values).sort()).toEqual([
+      'accountant_send_error', 'backed_up_to_drive_at', 'doc_type', 'drive_backup_error', 'drive_file_id', 'file_name', 'file_url', 'sent_to_accountant_at', 'updated_at',
+    ])
+  })
+
+  it('hands back what the follow-up e-mail needs: the row\'s vendor, date and review flag', async () => {
+    const res = await upgradeReceiptToTaxInvoice(db, 'r1', NEW)
+    expect(res).toMatchObject({ upgraded: true, row: { vendor: 'Anthropic, PBC', date: '04/06/2026', needs_review: false } })
+    fake.reset({ invoices: [{ ...RECEIPT, needs_review: 1 }] })
+    expect(await upgradeReceiptToTaxInvoice(db, 'r1', NEW)).toMatchObject({ upgraded: true, row: { needs_review: true } })
   })
 
   it('guards the swap on the row still being a receipt (atomic with the check)', async () => {
@@ -84,6 +115,48 @@ describe('upgradeReceiptToTaxInvoice', () => {
   })
 
   it('the same file arriving again (only the type changes) reports no replaced file', async () => {
-    expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, file_url: RECEIPT.file_url as string })).toEqual({ upgraded: true, replacedFileUrl: null })
+    expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, file_url: RECEIPT.file_url as string })).toMatchObject({ upgraded: true, replacedFileUrl: null })
+  })
+
+  describe('the tax id: known on both sides ⇒ the same issuer, or no upgrade', () => {
+    const withTaxId = (stored: string | null) => fake.reset({ invoices: [{ ...RECEIPT, vendor_tax_id: stored }] })
+
+    it('both sides carry a tax id and they differ: NOT upgraded, nothing is written, and the refusal is logged (row id only)', async () => {
+      withTaxId('512345678')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '515456002' })).toEqual({ upgraded: false, reason: 'tax_id_mismatch' })
+      expect(fake.updates).toHaveLength(0)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('NOT upgraded'), { id: 'r1' })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('512345678')
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('515456002')
+      warn.mockRestore()
+    })
+
+    it('the same tax id — written with hyphens or spaces — is the same issuer: upgraded', async () => {
+      withTaxId('512345678')
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '51-2345678' })).toMatchObject({ upgraded: true })
+      withTaxId('512345678')
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '512 345 678' })).toMatchObject({ upgraded: true })
+    })
+
+    it('a tax id on one side only never blocks the upgrade', async () => {
+      withTaxId(null)
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '512345678' })).toMatchObject({ upgraded: true })
+      withTaxId('512345678')
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: null })).toMatchObject({ upgraded: true })
+      withTaxId('512345678')
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', NEW)).toMatchObject({ upgraded: true }) // not given at all
+    })
+
+    it('a garbled tax id (not 8–9 digits) counts as "not known" — it cannot make the same document look like another issuer', async () => {
+      withTaxId('512345678')
+      expect(await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '12-34' })).toMatchObject({ upgraded: true })
+    })
+
+    it('the check happens before any write', async () => {
+      withTaxId('512345678')
+      await upgradeReceiptToTaxInvoice(db, 'r1', { ...NEW, vendor_tax_id: '515456002' })
+      expect(fake.updates).toHaveLength(0)
+    })
   })
 })
