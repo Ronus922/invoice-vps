@@ -471,7 +471,9 @@ export default function ScanStep({ file, position, isLast, onSaved, onNext, onCl
                 ) : (
                   <p className="m-0 text-sm text-amber-300" data-testid="scan-upgraded">
                     הצילום והסוג של הקבלה הקיימת עודכנו — לא נוצרה שורה חדשה, אבל חשבונית המס לא נשלחה לרואה החשבון
-                    {saved.needsReview ? ' (השורה מסומנת לבדיקה)' : ` — ${sendFailureText(saved.sendNote)}`}. היא תופיע בבאנר „חשבוניות לא נשלחו” ותישלח משם.
+                    {saved.needsReview
+                      ? ' (השורה מסומנת לבדיקה) — היא לא תישלח עד שתתוקן בטבלת החשבוניות.'
+                      : ` — ${sendFailureText(saved.sendNote)}. היא תופיע בבאנר „חשבוניות לא נשלחו” ותישלח משם.`}
                   </p>
                 )
               ) : saved.needsReview ? (

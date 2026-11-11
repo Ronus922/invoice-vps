@@ -581,31 +581,30 @@ async function processAttachment(
           return { status: 'error', filename }
         }
         rowCreated = true
+
+        // The send for the new row happens INSIDE this per-document lock (owner's decision of 2026-11-11 made the upgrade
+        // send mail too): a tax invoice for the same document waits on this key, so its upgrade — which clears the "sent"
+        // marker and sends the tax invoice — can never interleave with this send and have its outcome overwritten by it.
+        try {
+          // Awaited: fire-and-forget dropped the send silently when the process restarted (deploy) mid-scan.
+          await sendInvoiceToAccountant({
+            invoiceId: inserted.id,
+            fileUrl: file_url,
+            fileName: filename || null,
+            vendor: extracted.vendor,
+            date: extracted.date,
+            needsReview: Boolean(insertPayload.needs_review),
+          })
+        } catch (err) {
+          console.error('[scan-gmail] accountant send error:', err)
+        }
         return { insertedId: inserted.id, insertPayload }
       },
     )
     if ('status' in claimed) return claimed
-    const inserted = { id: claimed.insertedId }
-    const insertPayload = claimed.insertPayload
 
     if (vendor && extracted.category) {
       vendorCategoryMemory.set(normalizeVendorName(vendor), extracted.category)
-    }
-
-    const needsReview = Boolean(insertPayload.needs_review)
-    try {
-      // Awaited: fire-and-forget dropped the send silently when the process
-      // restarted (deploy) mid-scan.
-      await sendInvoiceToAccountant({
-        invoiceId: inserted.id,
-        fileUrl: file_url,
-        fileName: filename || null,
-        vendor: extracted.vendor,
-        date: extracted.date,
-        needsReview,
-      })
-    } catch (err) {
-      console.error('[scan-gmail] accountant send error:', err)
     }
 
     return { status: 'created', filename, vendor: extracted.vendor }

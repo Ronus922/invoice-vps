@@ -268,7 +268,7 @@ describe('folder scan — a remembered file is skipped before the upload and bef
     expect(t.calls.some((c) => c.url.startsWith('/api/extract-invoice'))).toBe(false)
     expect(t.posts()).toHaveLength(0)
     expect(t.removed).toEqual([])
-    expect(res).toMatchObject({ total: 1, created: 0, duplicates: 1, skippedKnown: 1, errors: 0 })
+    expect(res).toMatchObject({ total: 1, created: 0, duplicates: 1, skippedKnown: 1, skippedKnownFiles: ['scan.pdf'], errors: 0 })
     expect(res!.errorMessages).toEqual([])
     expect(t.hashChecks()[0]!.body).toEqual({ hashes: [FILE_HASH] })
     expect(t.verifyCalls().map((c) => c.url)).toEqual([`/api/invoices/verify?id=${OTHER_ID}`]) // the row is re-checked on every run
@@ -288,7 +288,7 @@ describe('folder scan — a remembered file is skipped before the upload and bef
     const t = setup({ known: { existing_id: OTHER_ID }, verify: { ok: false, reason: 'not_found' }, extracted: { ...EXTRACTED, doc_number: '777' }, created: { id: 'new-row', needs_review: true } })
     const res = await runFolderScan(t.handle, [], undefined)
     expect(upload.uploadFile).toHaveBeenCalledTimes(1)
-    expect(res).toMatchObject({ created: 1, skippedKnown: 0 })
+    expect(res).toMatchObject({ created: 1, skippedKnown: 0, skippedKnownFiles: [] })
   })
 
   it('the row is confirmable NOW: the file is scanned normally — a fresh extraction and match decide, and a remembered file is NEVER deleted on the strength of an old match', async () => {

@@ -30,6 +30,8 @@ export interface FolderScanResult {
   duplicates: number
   /** Of `duplicates`: files left in the folder because their original could not be confirmed, skipped by hash. */
   skippedKnown: number
+  /** Their names — the skip is silent otherwise, and it trusts an old verdict, so the owner can see exactly which files wait. */
+  skippedKnownFiles: string[]
   errors: number
   errorMessages: string[]
 }
@@ -271,6 +273,7 @@ async function runFolderScanLocked(
   report()
 
   const errorMessages: string[] = []
+  const skippedKnownFiles: string[] = []
 
   for (const { name, fileHandle } of files) {
     progress.currentFile = name
@@ -303,6 +306,7 @@ async function runFolderScanLocked(
       if (known && known.existing_id && (await checkExistingDocument(known.existing_id)) === 'unconfirmed') {
         progress.duplicates += 1
         progress.skippedKnown += 1
+        skippedKnownFiles.push(name)
         continue
       }
 
@@ -421,6 +425,7 @@ async function runFolderScanLocked(
     created: progress.created,
     duplicates: progress.duplicates,
     skippedKnown: progress.skippedKnown,
+    skippedKnownFiles,
     errors: progress.errors,
     errorMessages,
   }

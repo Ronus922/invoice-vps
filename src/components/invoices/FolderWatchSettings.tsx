@@ -281,6 +281,12 @@ export default function FolderWatchSettings({ open, onClose, onScanned }: Folder
                       {lastResult.skippedKnown > 0 ? ` (${lastResult.skippedKnown} מהן כפילויות לא מאומתות שנשארו בתיקייה — דולגו בלי חילוץ)` : ''}
                       {lastResult.errors > 0 ? ` · ${lastResult.errors} שגיאות` : ''}
                     </p>
+                    {lastResult.skippedKnownFiles.length > 0 && (
+                      <p className="text-xs text-[#8fb0e8] mt-1">
+                        נשארו בתיקייה (כפילות שלא אומתה, דולגו בלי חילוץ): {lastResult.skippedKnownFiles.slice(0, 5).join(', ')}
+                        {lastResult.skippedKnownFiles.length > 5 ? ` ועוד ${lastResult.skippedKnownFiles.length - 5}` : ''}
+                      </p>
+                    )}
                     {lastResult.total === 0 && (
                       <p className="text-xs text-[#8fb0e8] mt-1">לא נמצאו קבצים חדשים</p>
                     )}

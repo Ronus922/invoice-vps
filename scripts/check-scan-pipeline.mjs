@@ -128,6 +128,12 @@ run('check-scan-pipeline', async () => {
     'Gmail: אחרי שדרוג (או כשל DB לא חד-משמעי) האובייקט שהועלה נשמר',
     'scan-gmail: שדרוג שהצליח, וכשל DB בשדרוג, חייבים לסמן rowCreated = true (האובייקט עשוי להיות קובץ השורה) ולהחזיר error ולא duplicate')
 
+  // the send for a NEW row happens inside the per-document lock (before the job returns), never after it: an upgrade of the
+  // same document waits on that lock, so the two sends cannot interleave and overwrite each other's "sent" marker
+  const lockJobEnd = gmail.indexOf("return { insertedId: inserted.id, insertPayload }")
+  need(lockJobEnd !== -1 && gmail.lastIndexOf('await sendInvoiceToAccountant(', lockJobEnd) > gmail.indexOf('await withKeyLock(') && (gmail.match(/await sendInvoiceToAccountant\(/g) ?? []).length === 1,
+    'Gmail: השליחה לרו"ח של שורה חדשה בתוך נעילת המסמך', 'scan-gmail חייב לשלוח את שורה חדשה לרו"ח בתוך withKeyLock — אחרת שדרוג של אותו מסמך יכול להשתלב איתה ולדרוס את סימון השליחה')
+
   // the phone-scan screen: after an upgrade the SERVER sent the tax invoice (upgradeAndSend) — the screen shows "sent" only
   // from the server's `sent` flag, and does not call /api/send-to-accountant itself for an upgrade
   const scanStep = read('src/components/scan/ScanStep.tsx')
